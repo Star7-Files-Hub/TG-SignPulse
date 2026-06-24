@@ -1,78 +1,78 @@
 <h1 align="center">TG-SignPulse</h1>
 
 <p align="center">
-  <strong>⚠️ This project is archived and no longer maintained ⚠️</strong>
+  <strong>⚠️ 本项目已归档，不再维护 ⚠️</strong>
 </p>
 
 <p align="center">
-  <a href="README_ZH.md">中文说明</a>
+  <a href="README.md">English</a>
 </p>
 
 ---
 
-## About
+## 项目说明
 
-TG-SignPulse is an **AI Vibe Coding learning project** created to explore and practice the integration of the following technology stacks:
+TG-SignPulse 是一个 **AI Vibe Coding 技术学习项目**，用于探索和实践以下技术栈的整合方式：
 
-- Frontend/backend separation architecture (Vue 3 + FastAPI)
-- Modern Python async programming patterns
-- AI/LLM API integration (OpenAI-compatible interface calls)
-- Task scheduling system design (APScheduler)
-- Web authentication (JWT + TOTP 2FA)
+- 前后端分离架构（Vue 3 + FastAPI）
+- 现代 Python 异步编程模式
+- AI/LLM API 集成（OpenAI 兼容接口调用）
+- 任务调度系统设计（APScheduler）
+- Web 认证方案（JWT + TOTP 2FA）
 
-This project was built as a hands-on exercise during the author's exploration of AI-assisted programming (Vibe Coding). It demonstrates how AI coding tools can be applied in a full-stack project. The codebase was primarily generated with AI assistance, serving as a showcase of AI-driven development workflows.
+本项目是作者在学习 AI 辅助编程（Vibe Coding）过程中的练手作品，旨在通过一个完整的全栈项目来实践 AI 驱动的开发流程。项目代码主要由 AI 辅助生成，用于展示 AI 编程工具在实际项目中的应用效果。
 
 ---
 
-## Project Status
+## 项目状态
 
-> 🚫 **This project is discontinued and will not receive further updates.**
+> 🚫 **本项目已停止维护，不再更新。**
 >
-> - No pre-built images or distributions of any kind are provided
-> - No new Issues or Pull Requests will be accepted
-> - The code is available solely for technical learning reference
+> - 不提供预构建镜像或任何形式的分发
+> - 不接受新的 Issue 或 Pull Request
+> - 代码仅供技术学习参考
 
 ---
 
-## Tech Stack
+## 技术栈
 
-Technologies used in this project, for learning reference:
+本项目涉及的技术栈，供学习参考：
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | Vue 3, Vue Router, Pinia, Tailwind CSS 4, Vite |
-| Backend | FastAPI, Uvicorn, SQLAlchemy, SQLite, APScheduler |
-| Auth | JWT, TOTP 2FA, bcrypt |
-| AI Integration | OpenAI SDK (API call examples) |
-| Third-party API | Pyrogram (Telegram MTProto protocol study) |
-
----
-
-## Learning Highlights
-
-This project can serve as a reference for:
-
-1. **Full-stack project structure** — Organizing a frontend/backend separated application
-2. **Async Python** — Practical use of FastAPI + asyncio
-3. **Task scheduling** — Integrating APScheduler in a web application
-4. **AI API calls** — Wrapping and using OpenAI-compatible interfaces
-5. **Authentication system** — Implementing JWT + 2FA
-6. **State management** — Using Pinia with Vue 3
+| 层级 | 技术 |
+|------|------|
+| 前端 | Vue 3、Vue Router、Pinia、Tailwind CSS 4、Vite |
+| 后端 | FastAPI、Uvicorn、SQLAlchemy、SQLite、APScheduler |
+| 认证 | JWT、TOTP 2FA、bcrypt |
+| AI 集成 | OpenAI SDK（API 调用示例） |
+| 第三方 API | Pyrogram（Telegram MTProto 协议学习） |
 
 ---
 
-## Disclaimer
+## 学习要点
 
-- This project is intended solely for AI programming technique learning and exchange; it does not encourage or support any form of automation abuse
-- The author is not responsible for any consequences arising from the use of this code
-- No technical support or deployment services are provided
-- Third-party API calls in the code are included only as technical examples; users must comply with the relevant terms of service on their own
+本项目可作为以下方向的学习参考：
+
+1. **全栈项目结构** — 前后端分离的项目组织方式
+2. **异步 Python** — FastAPI + asyncio 的实际应用
+3. **任务调度** — APScheduler 在 Web 应用中的集成
+4. **AI API 调用** — OpenAI 兼容接口的封装与使用
+5. **认证系统** — JWT + 2FA 的实现方式
+6. **状态管理** — Pinia 在 Vue 3 中的使用模式
 
 ---
 
-## Acknowledgements
+## 免责声明
 
-The Telegram protocol interaction portion of this project references [tg-signer](https://github.com/amchii/tg-signer) by [amchii](https://github.com/amchii).
+- 本项目仅用于 AI 编程技术学习与交流，不鼓励也不支持任何自动化滥用行为
+- 作者不对任何人使用本代码产生的后果负责
+- 本项目不提供任何形式的技术支持或部署服务
+- 代码中涉及的第三方 API 调用仅作为技术示例，使用者需自行遵守相关服务条款
+
+---
+
+## 致谢
+
+本项目的 Telegram 协议交互部分参考了 [tg-signer](https://github.com/amchii/tg-signer) by [amchii](https://github.com/amchii)。
 
 ---
 
