@@ -122,37 +122,16 @@ _test*.json
 
 .signer
 *.session_string
+.nicegui
 
 .agent
 
 frontend/node_modules/
-node_modules/
 frontend/.next/
 frontend/out/
 frontend/tsconfig.tsbuildinfo
 frontend/.env.local
-docs/.vitepress/cache/
-docs/.vitepress/.temp/
-docs/.vitepress/dist/
-.venv/
-.venv*/
-.ruff_cache/
-.pytest_cache/
-.mypy_cache/
-*.pid
-.tg_signpulse_data_dir
-.local-data/
-.local-login-data/
-.test-run-data/
-.test-run-data-override
 
-# Development logs and temp files
-backend-*.log
-backend-*.pid
-frontend-*.log
-next-dev.*.log
-bandit_report*.json
-ruff_errors.txt
-git_show_head*.txt
-test_*.py
 
+# Claude Code worktrees (temporary per-session checkouts)
+.claude/worktrees/

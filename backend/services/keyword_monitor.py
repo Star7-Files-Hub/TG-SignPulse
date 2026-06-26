@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
 import asyncio
+import difflib
+import hashlib
 import logging
 import os
 import random
@@ -30,7 +32,7 @@ _PYROGRAM_IMPORT_ERROR: Exception | None = None
 try:
     from pyrogram import errors, filters
     from pyrogram.handlers import MessageHandler
-    from pyrogram.types import InlineKeyboardMarkup, Message, ReplyKeyboardMarkup
+    from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyKeyboardMarkup
 except Exception as exc:  # pragma: no cover - fallback for unsupported runtimes
     _PYROGRAM_IMPORT_ERROR = exc
 
@@ -63,6 +65,11 @@ except Exception as exc:  # pragma: no cover - fallback for unsupported runtimes
                 "Telegram runtime dependencies are unavailable. "
                 "Use Python 3.10-3.13 with a compatible pyrogram/kurigram install."
             ) from _PYROGRAM_IMPORT_ERROR
+
+    class InlineKeyboardButton:  # type: ignore[no-redef]
+        text = ""
+        url = None
+        callback_data = None
 
     class InlineKeyboardMarkup:  # type: ignore[no-redef]
         inline_keyboard = ()
@@ -302,6 +309,19 @@ def _reply_markup_marker(reply_markup: Any) -> Any:
     return None
 
 
+def _describe_reply_markup(reply_markup: Any) -> str:
+    """生成 reply_markup 的人类可读描述（用于日志）"""
+    if reply_markup is None:
+        return ""
+    if isinstance(reply_markup, InlineKeyboardMarkup):
+        btn_count = sum(len(row) for row in reply_markup.inline_keyboard)
+        return f"{btn_count} 个内联按钮"
+    if isinstance(reply_markup, ReplyKeyboardMarkup):
+        btn_count = sum(len(row) for row in reply_markup.keyboard)
+        return f"{btn_count} 个回复按钮"
+    return "按钮"
+
+
 def _message_state_marker(message: Message) -> tuple[Any, ...]:
     return (
         getattr(message, "id", None),
@@ -428,7 +448,17 @@ class KeywordMonitorService:
         self._task_status: dict[tuple[str, str], dict[str, Any]] = {}
         self._skip_log_times: dict[tuple[str, str, str], float] = {}
         self._ai_tools: Optional[Any] = None
+        self._forwarded_cache: dict[str, float] = {}  # 消息ID去重: dedup_key -> timestamp
+        self._last_forwarded_text: dict[str, str] = {}  # 完全匹配去重: monitor_id -> last_text
+        self._fuzzy_dedup_cache: dict[str, list[tuple[str, float]]] = {}  # 模糊去重: monitor_id -> [(hash, time)]
+        self._smart_dedup_last: dict[str, str] = {}  # 智能去重: monitor_id -> last_numbers_signature
+        self._monitor_logs: dict[str, list[dict]] = {}  # 结构化日志: monitor_id -> [{time, message, chat_title, msg_preview}]
         self._ai_cfg_signature: Optional[tuple[str, str, str]] = None
+        # ── 实时日志事件总线集成 ──
+        self._msg_received: dict[str, int] = {}       # account_name → 消息接收计数
+        self._last_msg_time: dict[str, float] = {}    # account_name → 最后收到消息的时间
+        self._last_heartbeat_time: float = 0.0
+        self._heartbeat_task: Optional[asyncio.Task] = None
 
     async def _ensure_client_ready(self, client: Any) -> None:
         if getattr(client, "is_connected", False):
@@ -542,12 +572,29 @@ class KeywordMonitorService:
         if active is not None:
             status["active"] = active
 
+    async def _publish_bus_event(
+        self,
+        event_type: str,
+        data: Dict[str, Any],
+    ) -> None:
+        """发布事件到实时日志事件总线"""
+        try:
+            from backend.services.log_event_bus import get_log_event_bus
+            bus = await get_log_event_bus()
+            await bus.publish("monitor_logs", {
+                "event_type": event_type,
+                **data,
+            })
+        except Exception:
+            pass  # 事件总线发布失败不影响主流程
+
     def _append_rule_log(
         self,
         rule: KeywordMonitorRule,
         line: str,
         *,
         active: Optional[bool] = None,
+        detail: Optional[dict] = None,
     ) -> None:
         self._append_task_log(
             rule.account_name,
@@ -555,6 +602,18 @@ class KeywordMonitorService:
             line,
             active=active,
         )
+        # 结构化日志（用于监控面板实时展示）
+        monitor_id = rule.task_name.replace("monitor:", "") if rule.task_name.startswith("monitor:") else rule.task_name
+        entry = {
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "monitor_id": monitor_id,
+            "message": line,
+            "chat_title": detail.get("chat_title", "") if detail else "",
+            "msg_preview": detail.get("msg_preview", "") if detail else "",
+        }
+        self._monitor_logs.setdefault(monitor_id, []).append(entry)
+        if len(self._monitor_logs.get(monitor_id, [])) > 500:
+            self._monitor_logs[monitor_id] = self._monitor_logs[monitor_id][-500:]
 
     def get_task_logs(self, task_name: str, account_name: Optional[str] = None) -> list[str]:
         if account_name:
@@ -661,6 +720,78 @@ class KeywordMonitorService:
         from backend.services.sign_tasks import get_sign_task_service
 
         rules: list[KeywordMonitorRule] = []
+
+        # ---- 独立监听器（不依赖任务系统） ----
+        try:
+            import json
+            monitors_file = settings.resolve_workdir() / "monitors.json"
+            if monitors_file.exists():
+                monitors = json.loads(monitors_file.read_text(encoding="utf-8"))
+                for m in monitors:
+                    if not m.get("enabled", True):
+                        continue
+                    action_type = m.get("action", "forward")
+                    action_dict = {
+                        "action": 8,
+                        "keywords": m.get("keywords", []),
+                        "match_mode": m.get("match_mode", "regex"),
+                    }
+                    action_dict["dedup_seconds"] = m.get("dedup_seconds", 60)
+                    action_dict["fuzzy_threshold"] = m.get("fuzzy_threshold", 0.85)
+                    action_dict["fuzzy_cooldown_minutes"] = m.get("fuzzy_cooldown_minutes", 5)
+                    action_dict["smart_dedup"] = m.get("smart_dedup", False)
+                    action_dict["forward_with_button"] = m.get("forward_with_button", False)
+                    action_dict["smart_dedup_pattern"] = m.get("smart_dedup_pattern")
+                    # 转发模式：chat_id=0 表示监听全部群聊/频道
+                    if action_type == "forward":
+                        action_dict["push_channel"] = "forward"
+                        if m.get("forward_chat_id"):
+                            action_dict["forward_chat_id"] = str(m["forward_chat_id"])
+                        if m.get("forward_thread_id"):
+                            action_dict["forward_message_thread_id"] = m["forward_thread_id"]
+                        for acc_name in m.get("account_names", []):
+                            rules.append(KeywordMonitorRule(
+                                account_name=acc_name,
+                                task_name=f"monitor:{m.get('id', 'unknown')}",
+                                chat_id=0,
+                                chat_name="*",
+                                message_thread_id=None,
+                                action=action_dict,
+                            ))
+                        continue
+                    # 红包模式：需要指定群组
+                    elif action_type in ("red_packet_button", "red_packet_keyword"):
+                        action_dict["push_channel"] = "continue"
+                        action_dict["red_packet_mode"] = "button" if action_type == "red_packet_button" else "keyword"
+                        if m.get("extract_pattern"):
+                            action_dict["extract_pattern"] = m["extract_pattern"]
+                        if m.get("grab_text_template"):
+                            action_dict["grab_text_template"] = m["grab_text_template"]
+                        if m.get("red_packet_delay"):
+                            action_dict["red_packet_delay"] = m["red_packet_delay"]
+                        if m.get("button_names"):
+                            action_dict["button_names"] = list(m["button_names"])
+                        if m.get("auto_reply_list"):
+                            action_dict["auto_reply_list"] = list(m["auto_reply_list"])
+                        if m.get("auto_reply_delay"):
+                            action_dict["auto_reply_delay"] = m["auto_reply_delay"]
+                        if action_type == "red_packet_keyword":
+                            tmpl = m.get("grab_text_template", "/grab {number}")
+                            action_dict["continue_actions"] = [{"action": 1, "text": tmpl}]
+                        for acc_name in m.get("account_names", []):
+                            for chat_id in m.get("chat_ids", []):
+                                rules.append(KeywordMonitorRule(
+                                    account_name=acc_name,
+                                    task_name=f"monitor:{m.get('id', 'unknown')}",
+                                    chat_id=chat_id,
+                                    chat_name=str(m.get('name', chat_id)),
+                                    message_thread_id=None,
+                                    action=action_dict,
+                                ))
+        except Exception as exc:
+            logger.warning("Failed to load independent monitors: %s", exc)
+
+        # ---- 任务系统中的监听模式任务 ----
         tasks = get_sign_task_service().list_tasks(force_refresh=True)
         for task in tasks:
             account_name = str(task.get("account_name") or "").strip()
@@ -714,7 +845,7 @@ class KeywordMonitorService:
             if mode == "exact" and haystack == needle:
                 return keyword
             if mode == "regex":
-                flags = re.IGNORECASE if ignore_case else 0
+                flags = re.IGNORECASE | re.MULTILINE if ignore_case else re.MULTILINE
                 try:
                     match = re.search(keyword, text, flags=flags)
                     if match:
@@ -1465,17 +1596,96 @@ class KeywordMonitorService:
                     rule,
                     f"后续动作 {index}/{len(rendered_actions)} 执行成功：{action_desc}",
                 )
-            self._append_rule_log(rule, "关键词命中后续动作全部执行完成")
+                self._append_rule_log(rule, "关键词命中后续动作全部执行完成")
+            await self._notify_red_packet_grab(rule=rule, message=message, chat_title="")
+
+    async def _notify_red_packet_grab(
+        self, *, rule: KeywordMonitorRule, message: Message, chat_title: str = ""
+    ) -> None:
+        """抢到红包后发送 Telegram Bot 通知"""
+        try:
+            from backend.services.config import get_config_service
+            gs = get_config_service().get_global_settings()
+            if not gs.get("telegram_bot_red_packet_notify_enabled"):
+                return
+            bot_token = gs.get("telegram_bot_token")
+            bot_chat_id = gs.get("telegram_bot_chat_id")
+            if not bot_token or not bot_chat_id:
+                return
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            title = chat_title or str(getattr(message.chat, 'title', message.chat.id))
+            text = (
+                f"🧧 抢到红包！\n"
+                f"群组: {title}\n"
+                f"时间: {now_str}\n"
+                f"关键词: {', '.join(rule.action.get('keywords', [])[:3]) or '全部'}"
+            )
+            from backend.services.push_notifications import send_telegram_bot_message
+            await send_telegram_bot_message(
+                bot_token=bot_token,
+                chat_id=str(bot_chat_id),
+                text=text,
+                message_thread_id=gs.get("telegram_bot_message_thread_id"),
+            )
+        except Exception:
+            pass
+
+    async def _notify_forward_success(
+        self,
+        *,
+        rule: KeywordMonitorRule,
+        message: Message,
+        chat_title: str = "",
+        forward_chat_id: str = "",
+        text_preview: str = "",
+        keyword: str = "",
+    ) -> None:
+        """转发成功后通过 Telegram Bot 发送通知提醒"""
+        try:
+            from backend.services.config import get_config_service
+            gs = get_config_service().get_global_settings()
+            if not gs.get("telegram_bot_forward_notify_enabled", True):
+                return
+            bot_token = gs.get("telegram_bot_token")
+            bot_chat_id = gs.get("telegram_bot_chat_id")
+            if not bot_token or not bot_chat_id:
+                return
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            title = chat_title or str(getattr(message.chat, 'title', message.chat.id))
+            preview = text_preview[:200].replace('\n', ' ')
+            text = (
+                f"📨 秒转通知\n"
+                f"群组: {title}\n"
+                f"时间: {now_str}\n"
+                f"关键词: {keyword}\n"
+                f"转发至: {forward_chat_id}\n\n"
+                f"{preview}"
+            )
+            from backend.services.push_notifications import send_telegram_bot_message
+            await send_telegram_bot_message(
+                bot_token=bot_token,
+                chat_id=str(bot_chat_id),
+                text=text,
+                message_thread_id=gs.get("telegram_bot_message_thread_id"),
+            )
+            self._append_rule_log(rule, "Telegram Bot 通知已发送")
+        except Exception:
+            pass
 
     async def _click_red_packet_button(
         self, *, client: Any, rule: KeywordMonitorRule, message: Message
     ) -> None:
-        """自动点击消息中的红包按钮"""
+        """自动点击消息中的红包按钮（支持指定按钮名/任意按钮）"""
         reply_markup = getattr(message, "reply_markup", None)
         if not reply_markup:
             return
 
-        red_packet_keywords = ["红包", "red", "packet", "luck", "claim", "open", "grab", "领取", "抢", "🧧"]
+        button_names = rule.action.get("button_names") if isinstance(rule.action, dict) else None
+        # 空列表 = 点击任意按钮（抢所有红包）
+        click_any = not button_names or (isinstance(button_names, list) and len(button_names) == 0)
+        if not isinstance(button_names, list):
+            button_names = []
+
         try:
             from pyrogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
 
@@ -1483,7 +1693,9 @@ class KeywordMonitorService:
                 for row in reply_markup.inline_keyboard:
                     for btn in row:
                         btn_text = getattr(btn, "text", "") or ""
-                        if any(kw.lower() in btn_text.lower() for kw in red_packet_keywords):
+                        if not btn_text:
+                            continue
+                        if click_any or any(name.strip().lower() in btn_text.lower() for name in button_names if name.strip()):
                             self._append_rule_log(rule, f"红包模式：点击按钮 [{btn_text}]")
                             await self._click_inline_button(client, message, btn)
                             return
@@ -1491,7 +1703,9 @@ class KeywordMonitorService:
                 for row in reply_markup.keyboard:
                     for btn in row:
                         btn_text = btn if isinstance(btn, str) else getattr(btn, "text", "")
-                        if any(kw.lower() in btn_text.lower() for kw in red_packet_keywords):
+                        if not btn_text:
+                            continue
+                        if click_any or any(name.strip().lower() in btn_text.lower() for name in button_names if name.strip()):
                             self._append_rule_log(rule, f"红包模式：点击回复按钮 [{btn_text}]")
                             await client.send_message(
                                 chat_id=message.chat.id,
@@ -1503,13 +1717,18 @@ class KeywordMonitorService:
             self._append_rule_log(rule, f"红包按钮点击失败: {exc}")
 
     async def _send_red_packet_reply(
-        self, *, client: Any, rule: KeywordMonitorRule, message: Message, reply_text: str
+        self, *, client: Any, rule: KeywordMonitorRule, message: Message,
+        reply_text: str, reply_delay: float = 0
     ) -> None:
         """发送红包抢后的自动回复"""
         if not reply_text:
             return
         try:
-            await asyncio.sleep(random.uniform(0.3, 0.8))
+            if reply_delay > 0:
+                self._append_rule_log(rule, f"等待 {reply_delay:g} 秒后发送自动回复")
+                await asyncio.sleep(reply_delay)
+            else:
+                await asyncio.sleep(random.uniform(0.3, 0.8))
             await client.send_message(
                 chat_id=message.chat.id,
                 text=reply_text,
@@ -1523,6 +1742,11 @@ class KeywordMonitorService:
         try:
             from backend.services.config import get_config_service
 
+            # ── 消息接收心跳：记录每次收到消息的时间 ──
+            now = time.time()
+            self._msg_received[account_name] = self._msg_received.get(account_name, 0) + 1
+            self._last_msg_time[account_name] = now
+
             text = _message_text(message)
             if not text:
                 return
@@ -1531,7 +1755,7 @@ class KeywordMonitorService:
                 rule
                 for rule in self._rules
                 if rule.account_name == account_name
-                and rule.chat_id == message.chat.id
+                and (rule.chat_id == 0 or rule.chat_id == message.chat.id)
             ]
             if not same_chat_rules:
                 return
@@ -1596,8 +1820,9 @@ class KeywordMonitorService:
                             text_preview = text_preview[:117] + "..."
                         self._append_rule_log(
                             rule,
-                            f"监听收到消息但关键词未命中：消息={text_preview}",
+                            f"未命中：{text_preview}",
                             active=True,
+                            detail={"chat_title": chat_title, "msg_preview": text_preview[:80]},
                         )
                     continue
                 text_preview = text.replace("\n", " ").strip()
@@ -1605,10 +1830,19 @@ class KeywordMonitorService:
                     text_preview = text_preview[:157] + "..."
                 self._append_rule_log(
                     rule,
-                    f"关键词命中：Chat={chat_title}({getattr(message.chat, 'id', '')})，"
-                    f"消息ID={getattr(message, 'id', '')}，捕获值={matched}，消息={text_preview}",
+                    f"✅ 命中 [{matched}] Chat={chat_title}({getattr(message.chat, 'id', '')})：{text_preview}",
                     active=True,
+                    detail={"chat_title": chat_title, "msg_preview": text_preview[:80]},
                 )
+                # 发布到实时事件总线
+                await self._publish_bus_event("keyword_match", {
+                    "monitor_id": rule.task_name.replace("monitor:", "") if rule.task_name.startswith("monitor:") else rule.task_name,
+                    "account_name": account_name,
+                    "chat_title": chat_title,
+                    "keyword": matched,
+                    "msg_preview": text_preview[:80],
+                    "sender": sender,
+                })
                 body_lines = [
                     f"Task: {rule.task_name}",
                     f"Chat: {chat_title}",
@@ -1639,33 +1873,136 @@ class KeywordMonitorService:
                 )
                 if forward_chat_id is not None:
                     try:
+                        # === 两级去重：完全匹配 + 模糊匹配 ===
+                        monitor_id = rule.task_name.replace("monitor:", "")
+                        dedup_seconds = int(rule.action.get("dedup_seconds", 60) or 0)
+                        now = time.time()
+                        forwarded = False
+
+                        if dedup_seconds > 0:
+                            normalized_text = text.strip()
+
+                            # Level 1: 消息ID去重（同一消息不重复转发）
+                            dedup_key = f"{rule.task_name}:{message.chat.id}:{message.id}"
+                            if dedup_key in self._forwarded_cache:
+                                if now - self._forwarded_cache[dedup_key] < dedup_seconds:
+                                    continue
+                            self._forwarded_cache[dedup_key] = now
+
+                            # Level 2: 完全匹配 — 与上一条转发内容完全一致则拦掉
+                            last_text = self._last_forwarded_text.get(monitor_id, "")
+                            if normalized_text and normalized_text == last_text:
+                                self._append_rule_log(rule, "去重（完全匹配）：该消息与上一条完全一致，已拦截")
+                                continue
+
+                            # Level 3: 模糊匹配 — 冷却时间内相似度 ≥ 阈值则拦掉
+                            fuzzy_threshold = float(rule.action.get("fuzzy_threshold", 0.85) or 0)
+                            fuzzy_cooldown = int(rule.action.get("fuzzy_cooldown_minutes", 5) or 0) * 60
+                            if fuzzy_threshold > 0 and fuzzy_cooldown > 0 and normalized_text:
+                                text_hash = hashlib.md5(normalized_text.encode()).hexdigest()
+                                cache = self._fuzzy_dedup_cache.setdefault(monitor_id, [])
+                                # 清理过期
+                                cache[:] = [(h, t) for h, t in cache if now - t < fuzzy_cooldown]
+                                for cached_hash, cached_time in cache:
+                                    cached_text = self._last_forwarded_text.get(f"{monitor_id}:hash:{cached_hash}", "")
+                                    if cached_text:
+                                        ratio = difflib.SequenceMatcher(None, normalized_text, cached_text).ratio()
+                                        if ratio >= fuzzy_threshold:
+                                            remain = int(fuzzy_cooldown - (now - cached_time))
+                                            self._append_rule_log(rule, f"去重（模糊匹配）：相似度 {ratio:.2f} ≥ {fuzzy_threshold}，冷却剩余 {remain}s，已拦截")
+                                            forwarded = True
+                                            break
+                                if forwarded:
+                                    continue
+                                # 记录本次
+                                cache.append((text_hash, now))
+                                if len(cache) > 20:
+                                    cache.pop(0)
+                                self._last_forwarded_text[f"{monitor_id}:hash:{text_hash}"] = normalized_text
+
+                            # Level 4: 智能去重 — 提取数值比对，数值不变不转发
+                            smart_dedup = rule.action.get("smart_dedup", False)
+                            if smart_dedup and normalized_text:
+                                pattern = rule.action.get("smart_dedup_pattern") or r'\d+'
+                                nums = re.findall(pattern, normalized_text)
+                                sig = '|'.join(nums) if nums else ''
+                                last_sig = self._smart_dedup_last.get(monitor_id, '')
+                                if sig and sig == last_sig:
+                                    self._append_rule_log(rule, f"去重（智能数值）：数值签名 [{sig}] 未变化，已拦截")
+                                    continue
+                                if sig:
+                                    self._smart_dedup_last[monitor_id] = sig
+                                    self._append_rule_log(rule, f"智能去重：数值签名 [{sig}]" + (f" (前次: [{last_sig}])" if last_sig else " (首次)"))
+
+                            # 记录最后转发的文本
+                            self._last_forwarded_text[monitor_id] = normalized_text
+
+                            # 定期清理
+                            self._forwarded_cache = {
+                                k: v for k, v in self._forwarded_cache.items()
+                                if now - v < max(dedup_seconds * 2, 120)
+                            }
+
                         forward_kwargs: dict[str, Any] = {}
                         forward_thread_id = _as_int_or_none(
                             rule.action.get("forward_message_thread_id")
                         )
                         if forward_thread_id is not None:
                             forward_kwargs["message_thread_id"] = forward_thread_id
-                        forward_payload = forward_text
-                        if url:
-                            forward_payload += f"\n\nLink: {url}"
+
+                        # ── 同步主转发：copy_message 完整保留原消息 ──
+                        # 包括文本、格式、图片/视频/文件等所有附件、以及内联按钮/回复键盘
                         await self._call_client_with_retry(
                             client,
-                            lambda _forward_chat_id=forward_chat_id, _forward_payload=forward_payload[:3900], _forward_kwargs=dict(forward_kwargs): client.send_message(
-                                _forward_chat_id,
-                                _forward_payload,
-                                **_forward_kwargs,
+                            lambda: client.copy_message(
+                                forward_chat_id,
+                                message.chat.id,
+                                message.id,
+                                **forward_kwargs,
                             ),
-                            operation=f"keyword monitor forward match {forward_chat_id}",
+                            operation=f"keyword monitor copy_message {forward_chat_id}",
                         )
                         self._append_rule_log(
                             rule,
-                            f"关键词命中消息已转发：目标 Chat={forward_chat_id}"
-                            + (
-                                f"，话题ID={forward_thread_id}"
-                                if forward_thread_id is not None
-                                else ""
-                            ),
+                            f"关键词命中消息已复制转发（完整保留原消息）：目标 Chat={forward_chat_id}"
+                            + (f"，话题ID={forward_thread_id}" if forward_thread_id is not None else ""),
                         )
+
+                        # ── 附加元数据消息 ──
+                        meta_lines = [f"📋 Task: {rule.task_name.replace('monitor:', '')}"]
+                        meta_lines.append(f"💬 Chat: {chat_title}")
+                        meta_lines.append(f"🔑 Keyword: {matched}")
+                        if sender:
+                            meta_lines.append(f"👤 Sender: {sender}")
+                        if url:
+                            meta_lines.append(f"🔗 {url}")
+                        await self._call_client_with_retry(
+                            client,
+                            lambda _forward_chat_id=forward_chat_id,
+                            _meta=("\n".join(meta_lines))[:4096],
+                            _fw_kw=dict(forward_kwargs): client.send_message(
+                                _forward_chat_id, _meta, **_fw_kw,
+                            ),
+                            operation=f"keyword monitor metadata follow-up {forward_chat_id}",
+                        )
+
+                        # ── Bot 通知 ──
+                        await self._notify_forward_success(
+                            rule=rule,
+                            message=message,
+                            chat_title=chat_title,
+                            forward_chat_id=str(forward_chat_id),
+                            text_preview=text,
+                            keyword=matched,
+                        )
+
+                        # 发布转发成功事件
+                        await self._publish_bus_event("forward_success", {
+                            "monitor_id": rule.task_name.replace("monitor:", "") if rule.task_name.startswith("monitor:") else rule.task_name,
+                            "account_name": account_name,
+                            "forward_chat_id": str(forward_chat_id),
+                            "forward_thread_id": forward_thread_id,
+                        })
                     except Exception as exc:
                         logger.warning(
                             "Failed to forward keyword match to %r: %s",
@@ -1676,6 +2013,27 @@ class KeywordMonitorService:
                             rule,
                             f"关键词命中消息转发失败：目标 Chat={forward_chat_id}，错误={exc}",
                         )
+                        # 发布转发失败事件
+                        await self._publish_bus_event("forward_failure", {
+                            "monitor_id": rule.task_name.replace("monitor:", "") if rule.task_name.startswith("monitor:") else rule.task_name,
+                            "account_name": account_name,
+                            "forward_chat_id": str(forward_chat_id),
+                            "error": str(exc),
+                        })
+
+                elif push_channel == "forward":
+                    # push_channel=forward 但 forward_chat_id 未配置或无效
+                    self._append_rule_log(
+                        rule,
+                        f"⚠️ 转发目标未配置（forward_chat_id 为空/无效），关键词已命中但消息未被转发。"
+                        f"请在监控器设置中填写「转发目标 Chat ID」。"
+                        f"命中内容：{text[:100]}",
+                    )
+                    logger.warning(
+                        "Keyword monitor forward skipped for task %s: forward_chat_id is %r",
+                        rule.task_name,
+                        rule.action.get("forward_chat_id"),
+                    )
 
                 if push_channel not in {"forward", "continue"}:
                     push_settings = dict(global_settings)
@@ -1722,13 +2080,16 @@ class KeywordMonitorService:
                             rule=rule,
                             message=message,
                         )
+                        await self._notify_red_packet_grab(rule=rule, message=message, chat_title=chat_title)
                         # 发送随机回复
                         if variables.get("random_reply"):
+                            reply_delay = float(rule.action.get("auto_reply_delay") or 0)
                             await self._send_red_packet_reply(
                                 client=client,
                                 rule=rule,
                                 message=message,
                                 reply_text=variables["random_reply"],
+                                reply_delay=reply_delay,
                             )
 
                     await self._execute_continue_actions(
@@ -1785,6 +2146,10 @@ class KeywordMonitorService:
             for account_name in accounts:
                 account_rules = [rule for rule in rules if rule.account_name == account_name]
                 chat_ids = sorted({rule.chat_id for rule in account_rules})
+                # chat_id=0 表示监听全部群聊/频道（转发模式）
+                has_wildcard = 0 in chat_ids
+                if has_wildcard:
+                    chat_ids = [cid for cid in chat_ids if cid != 0]
                 proxy_value = get_account_proxy(account_name)
                 if not proxy_value:
                     proxy_value = (global_settings.get("global_proxy") or "").strip() or None
@@ -1813,16 +2178,19 @@ class KeywordMonitorService:
 
                 lock = get_account_lock(account_name)
                 async with lock:
-                    client_key = str(session_dir.joinpath(account_name).resolve())
-                    existing = _CLIENT_INSTANCES.get(client_key)
+                    base_key = str(session_dir.joinpath(account_name).resolve())
+                    # Also check the ::memory suffixed key (used when in_memory=True)
+                    memory_key = f"{base_key}::memory"
+                    existing = _CLIENT_INSTANCES.get(base_key) or _CLIENT_INSTANCES.get(memory_key)
                     if (
                         existing is not None
                         and getattr(existing, "_tg_signpulse_no_updates", None) is True
                     ):
                         logger.info(
-                            "Recreating keyword monitor client for %s with updates enabled",
+                            "Recreating keyword monitor client for %s (was no_updates=True) with updates enabled",
                             account_name,
                         )
+                        # close_client_by_name now handles both base_key and ::memory variants
                         await close_client_by_name(account_name, workdir=session_dir)
 
                     client = get_client(
@@ -1841,23 +2209,15 @@ class KeywordMonitorService:
                     ) -> None:
                         await self._on_message(name, client, message)
 
-                    handler_ref = client.add_handler(
-                        MessageHandler(
-                            handler,
-                            filters.chat(chat_ids) & (filters.text | filters.caption),
-                        )
-                    )
+                    # 构建消息过滤器
+                    # 注意：filters.chat() 内部会调用 resolve_peer()，对无效群组直接抛 CHANNEL_INVALID
+                    # 因此先把 client 启动，再预热每个 chat，排除无效的
                     try:
                         await client.__aenter__()
                     except Exception:
-                        try:
-                            client.remove_handler(*handler_ref)
-                        except Exception:
-                            pass
                         logger.warning(
-                            "Keyword monitor failed to start for %s",
-                            account_name,
-                            exc_info=True,
+                            "Keyword monitor failed to start client for %s",
+                            account_name, exc_info=True,
                         )
                         for rule in account_rules:
                             self._append_rule_log(
@@ -1866,6 +2226,38 @@ class KeywordMonitorService:
                                 active=False,
                             )
                         continue
+
+                    # 预热 + 过滤无效 chat
+                    valid_chat_ids: list[int] = []
+                    for cid in chat_ids:
+                        try:
+                            await client.get_chat(cid)
+                            valid_chat_ids.append(cid)
+                        except Exception:
+                            logger.warning(
+                                "Keyword monitor skipping invalid/unjoined chat_id=%s for %s",
+                                cid, account_name,
+                            )
+                            for rule in account_rules:
+                                if rule.chat_id == cid:
+                                    self._append_rule_log(
+                                        rule,
+                                        f"⚠️ 聊天 {cid} 无效或未加入，已跳过，对该群的监听将不生效",
+                                        active=True,
+                                    )
+
+                    if has_wildcard:
+                        base_filter = filters.group | filters.channel
+                        if valid_chat_ids:
+                            base_filter = base_filter | filters.chat(valid_chat_ids)
+                    elif valid_chat_ids:
+                        base_filter = filters.chat(valid_chat_ids)
+                    else:
+                        continue
+                    msg_filter = base_filter & (filters.text | filters.caption)
+                    handler_ref = client.add_handler(
+                        MessageHandler(handler, msg_filter)
+                    )
 
                     self._handler_refs.append((account_name, client, handler_ref))
                     started_accounts.add(account_name)
@@ -1881,7 +2273,74 @@ class KeywordMonitorService:
 
             self._active_key = key if started_accounts == set(accounts) else ""
 
+            # 启动心跳任务
+            if started_accounts and self._heartbeat_task is None:
+                self._heartbeat_task = asyncio.ensure_future(self._heartbeat_loop())
+
+            # 发布启动事件
+            await self._publish_bus_event("service_status", {
+                "status": "started" if started_accounts else "partial",
+                "accounts": list(started_accounts),
+                "expected_accounts": list(accounts),
+            })
+
+    async def _heartbeat_loop(self) -> None:
+        """每 30 秒发布一次心跳，包含消息接收状态诊断"""
+        while True:
+            await asyncio.sleep(30)
+            now = time.time()
+            # 防止重复心跳
+            if now - self._last_heartbeat_time < 25:
+                continue
+            self._last_heartbeat_time = now
+
+            try:
+                active_accounts: List[str] = []
+                for account_name, client, _ in self._handler_refs:
+                    is_connected = getattr(client, "is_connected", False)
+                    msg_count = self._msg_received.get(account_name, 0)
+                    last_msg = self._last_msg_time.get(account_name, 0)
+                    idle_seconds = int(now - last_msg) if last_msg else -1
+                    is_healthy = is_connected and (
+                        idle_seconds < 0 or idle_seconds < 300
+                    )
+
+                    active_accounts.append(account_name)
+                    await self._publish_bus_event("heartbeat", {
+                        "account_name": account_name,
+                        "is_connected": is_connected,
+                        "messages_received": msg_count,
+                        "last_message_seconds_ago": idle_seconds if idle_seconds >= 0 else -1,
+                        "is_healthy": is_healthy,
+                        "handler_count": len(self._handler_refs),
+                        "rule_count": len(self._rules),
+                    })
+
+                    # 诊断：超过 5 分钟未收到消息，输出警告
+                    if idle_seconds > 300 and msg_count == 0:
+                        logger.warning(
+                            "Keyword monitor for %s: no messages received in %ss. "
+                            "Possible issues: wrong chat filter, session expired, "
+                            "or client with no_updates=True was reused.",
+                            account_name, idle_seconds,
+                        )
+                        await self._publish_bus_event("diagnostic", {
+                            "account_name": account_name,
+                            "level": "warning",
+                            "message": (
+                                f"已 {idle_seconds}s 未收到任何消息。"
+                                f"可能原因：聊天过滤不对、会话失效、或 no_updates 客户端复用。"
+                            ),
+                        })
+            except Exception as exc:
+                logger.warning("Heartbeat publish failed: %s", exc)
+
     async def stop(self) -> None:
+        # 停止心跳
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            self._heartbeat_task = None
+
         for rule in self._rules:
             self._append_rule_log(
                 rule,
@@ -1902,6 +2361,11 @@ class KeywordMonitorService:
         self._handler_refs = []
         self._rules = []
         self._active_key = ""
+
+        # 发布停止事件
+        await self._publish_bus_event("service_status", {
+            "status": "stopped",
+        })
 
 
 _keyword_monitor_service: Optional[KeywordMonitorService] = None

@@ -7,7 +7,12 @@ export default defineConfig({
     vue(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.ico'],
+      // 使用自定义 Service Worker (public/sw.js)，获得稳健的网络错误处理
+      srcDir: 'public',
+      filename: 'sw.js',
+      injectManifest: {
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+      },
       manifest: {
         name: 'TG-SignPulse',
         short_name: 'SignPulse',
@@ -29,19 +34,7 @@ export default defineConfig({
           }
         ]
       },
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
-        runtimeCaching: [
-          {
-            urlPattern: /^https?:\/\/.*\/api\//,
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'api-cache',
-              expiration: { maxEntries: 50, maxAgeSeconds: 300 }
-            }
-          }
-        ]
-      }
+      workbox: {} as any,
     })
   ],
   server: {

@@ -373,6 +373,7 @@ class GlobalSettingsRequest(BaseModel):
     telegram_bot_token: Optional[str] = None
     telegram_bot_chat_id: Optional[str] = None
     telegram_bot_message_thread_id: Optional[int] = None
+    telegram_bot_red_packet_notify_enabled: bool = False
     timezone: Optional[str] = None
 
 
@@ -388,6 +389,7 @@ class GlobalSettingsResponse(BaseModel):
     telegram_bot_token: Optional[str] = None
     telegram_bot_chat_id: Optional[str] = None
     telegram_bot_message_thread_id: Optional[int] = None
+    telegram_bot_red_packet_notify_enabled: bool = False
     timezone: str = "Asia/Shanghai"
 
 
@@ -395,7 +397,9 @@ class GlobalSettingsResponse(BaseModel):
 def get_global_settings(current_user: User = Depends(get_current_user)):
     try:
         settings = get_config_service().get_global_settings()
-        settings.setdefault("timezone", get_settings().timezone)
+        # timezone 为 None/null 时用环境变量默认值
+        if not settings.get("timezone"):
+            settings["timezone"] = get_settings().timezone
         return GlobalSettingsResponse(**settings)
     except Exception as e:
         raise HTTPException(
@@ -420,7 +424,8 @@ async def save_global_settings(
             "telegram_bot_token": request.telegram_bot_token,
             "telegram_bot_chat_id": request.telegram_bot_chat_id,
             "telegram_bot_message_thread_id": request.telegram_bot_message_thread_id,
-            "timezone": request.timezone,
+            "telegram_bot_red_packet_notify_enabled": request.telegram_bot_red_packet_notify_enabled,
+            "timezone": request.timezone or get_settings().timezone,
         }
         if hasattr(request, "model_fields_set"):
             fields_set = request.model_fields_set

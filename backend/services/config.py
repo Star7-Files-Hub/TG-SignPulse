@@ -615,6 +615,7 @@ class ConfigService:
             "telegram_bot_token": None,
             "telegram_bot_chat_id": None,
             "telegram_bot_message_thread_id": None,
+            "telegram_bot_red_packet_notify_enabled": False,
             "timezone": get_settings().timezone,
         }
 
