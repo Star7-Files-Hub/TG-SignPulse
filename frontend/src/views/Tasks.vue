@@ -2,7 +2,7 @@
 import { ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { Play, FileText, Edit2, Trash2, Plus, Radio, Clock, Shuffle } from 'lucide-vue-next'
-import { listSignTasks, deleteSignTask, startSignTaskRun, listAccounts } from '../lib/api' 
+import { listSignTasks, deleteSignTask, startSignTaskRun, listAccounts, getGlobalSettings } from '../lib/api' 
 import { useI18n } from '../composables/useI18n'
 import AddTaskModal from '../components/tasks/AddTaskModal.vue'
 import EditTaskModal from '../components/tasks/EditTaskModal.vue'
@@ -12,6 +12,7 @@ const route = useRoute()
 const { t } = useI18n()
 const tasks = ref<any[]>([])
 const pageLoading = ref(true)
+const appTimezone = ref('')
 const showAddModal = ref(false)
 const showEditModal = ref(false)
 const showLogsModal = ref(false)
@@ -37,12 +38,15 @@ const formatDate = (dateStr: string) => {
   if (!dateStr) return '-'
   try {
     const d = new Date(dateStr)
-    const mo = String(d.getMonth() + 1).padStart(2, '0')
-    const da = String(d.getDate()).padStart(2, '0')
-    const ho = String(d.getHours()).padStart(2, '0')
-    const mi = String(d.getMinutes()).padStart(2, '0')
-    const se = String(d.getSeconds()).padStart(2, '0')
-    return `${mo}/${da} ${ho}:${mi}:${se}`
+    const tz = appTimezone.value || 'UTC'
+    const parts = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: tz,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    }).formatToParts(d)
+    const get = (t: string) => parts.find(p => p.type === t)?.value || '00'
+    return `${get('month')}/${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`
   } catch (e) {
     return dateStr
   }
@@ -127,9 +131,15 @@ const loadTasks = async () => {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   loadTasks()
   loadAllAccounts()
+  // 获取时区
+  try {
+    const token = localStorage.getItem('tg-signer-token') || ''
+    const res = await getGlobalSettings(token)
+    if (res.timezone) appTimezone.value = res.timezone
+  } catch { }
 })
 
 const loadChatAvatar = async (task: any, accountName: string, chatId: number) => {
@@ -272,6 +282,10 @@ const openLogs = (task: any) => {
     </div>
 
     <div v-else class="flex flex-col gap-2 pb-20">
+    <div v-if="appTimezone" class="flex items-center gap-1.5 px-1 mb-1">
+      <span class="text-[10px] text-gray-400 uppercase tracking-wide">{{ t('tasks.timezone') }}</span>
+      <router-link to="/settings" class="text-[10px] text-sky-500 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300 bg-sky-50 dark:bg-sky-500/10 px-1.5 py-0.5 rounded font-mono transition-colors" :title="t('tasks.changeTimezone')">{{ appTimezone }}</router-link>
+    </div>
     <div 
       v-for="task in tasks" :key="task.id"
       class="group flex flex-col sm:flex-row sm:items-center p-4 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800/60 hover:border-gray-300 dark:hover:border-gray-700 transition-colors"
@@ -390,6 +404,6 @@ const openLogs = (task: any) => {
     <!-- Modals -->
     <AddTaskModal :isOpen="showAddModal" @close="showAddModal = false" @success="loadTasks" />
     <EditTaskModal :isOpen="showEditModal" :task="editingTask" @close="showEditModal = false" @success="loadTasks" />
-    <TaskLogsModal :isOpen="showLogsModal" :task="logsTask" :runAccount="logsRunAccount" @close="showLogsModal = false" />
+    <TaskLogsModal :isOpen="showLogsModal" :task="logsTask" :runAccount="logsRunAccount" @close="showLogsModal = false; loadTasks()" />
   </div>
 </template>

@@ -2,7 +2,7 @@
 import { ref, watch } from 'vue'
 import Modal from '../Modal.vue'
 import TaskForm from './TaskForm.vue'
-import { createSignTask } from '../../lib/api'
+import { createSignTask, createSignTasksBatch } from '../../lib/api'
 import { useI18n } from '../../composables/useI18n'
 
 const { t } = useI18n()
@@ -30,7 +30,13 @@ const handleSave = async () => {
   loading.value = true
   error.value = ''
   try {
-    await createSignTask(token, { ...payload.value, notify_on_failure: notifyOnFailure.value })
+    const data = { ...payload.value, notify_on_failure: notifyOnFailure.value }
+    // 多个会话时使用批量创建，每个 chat 拆分为独立任务
+    if (data.chats && data.chats.length > 1) {
+      await createSignTasksBatch(token, data)
+    } else {
+      await createSignTask(token, data)
+    }
     emit('success')
     emit('close')
   } catch (e: any) {

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
 from backend.core.auth import get_current_user
+from backend.core.config import get_settings
 from backend.models.user import User
 from backend.services.config import get_config_service
 from backend.utils.storage import is_writable_dir
@@ -372,6 +373,7 @@ class GlobalSettingsRequest(BaseModel):
     telegram_bot_token: Optional[str] = None
     telegram_bot_chat_id: Optional[str] = None
     telegram_bot_message_thread_id: Optional[int] = None
+    timezone: Optional[str] = None
 
 
 class GlobalSettingsResponse(BaseModel):
@@ -386,12 +388,14 @@ class GlobalSettingsResponse(BaseModel):
     telegram_bot_token: Optional[str] = None
     telegram_bot_chat_id: Optional[str] = None
     telegram_bot_message_thread_id: Optional[int] = None
+    timezone: str = "Asia/Shanghai"
 
 
 @router.get("/settings", response_model=GlobalSettingsResponse)
 def get_global_settings(current_user: User = Depends(get_current_user)):
     try:
         settings = get_config_service().get_global_settings()
+        settings.setdefault("timezone", get_settings().timezone)
         return GlobalSettingsResponse(**settings)
     except Exception as e:
         raise HTTPException(
@@ -416,6 +420,7 @@ async def save_global_settings(
             "telegram_bot_token": request.telegram_bot_token,
             "telegram_bot_chat_id": request.telegram_bot_chat_id,
             "telegram_bot_message_thread_id": request.telegram_bot_message_thread_id,
+            "timezone": request.timezone,
         }
         if hasattr(request, "model_fields_set"):
             fields_set = request.model_fields_set
@@ -425,6 +430,12 @@ async def save_global_settings(
             settings["data_dir"] = request.data_dir
 
         get_config_service().save_global_settings(settings)
+
+        # 时区变更时同步调度器（等待完成再返回，确保后续操作使用新时区）
+        if request.timezone:
+            from backend.scheduler import sync_jobs
+            await sync_jobs()
+
         return AIConfigSaveResponse(success=True, message="Global settings saved")
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

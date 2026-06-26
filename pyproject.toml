@@ -49,6 +49,10 @@ dev = [
 speedup = [
     "tgcrypto"
 ]
+postgresql = [
+    "psycopg2-binary>=2.9",
+    "alembic>=1.13",
+]
 
 [project.urls]
 Homepage = "https://github.com/amchii/tg-signer"

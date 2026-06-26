@@ -20,7 +20,7 @@ defineEmits<{
         <div class="absolute inset-0 bg-gray-900/40 dark:bg-black/60 backdrop-blur-sm" @click="$emit('close')"></div>
         
         <!-- Modal Panel -->
-        <div :class="['relative w-full bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800/60 shadow-xl overflow-hidden flex flex-col', maxWidthClass || 'max-w-md']">
+        <div :class="['relative w-full bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800/60 shadow-xl flex flex-col', maxWidthClass || 'max-w-md']">
           <!-- Header -->
           <div class="flex items-center justify-between px-5 h-14 border-b border-gray-200 dark:border-gray-800/60 bg-gray-50 dark:bg-gray-900">
             <div class="flex items-center gap-3">

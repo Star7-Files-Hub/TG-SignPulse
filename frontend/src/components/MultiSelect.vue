@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, watch, nextTick } from 'vue'
 import { ChevronDown, Check } from 'lucide-vue-next'
 import { useI18n } from '../composables/useI18n'
 
@@ -20,6 +20,7 @@ const emit = defineEmits<{
 
 const isOpen = ref(false)
 const selectRef = ref<HTMLElement | null>(null)
+const dropdownStyle = ref<Record<string, string>>({})
 
 const toggle = () => {
   if (props.disabled) return
@@ -28,11 +29,9 @@ const toggle = () => {
 
 const toggleAllMode = () => {
   if (props.allMode) {
-    // Deselect all mode, clear selection
     emit('update:allMode', false)
     emit('update:modelValue', [])
   } else {
-    // Enable all mode
     emit('update:allMode', true)
     emit('update:modelValue', props.options.map(o => o.value))
   }
@@ -40,7 +39,6 @@ const toggleAllMode = () => {
 }
 
 const select = (val: string) => {
-  // If in allMode, clicking individual item exits allMode
   if (props.allMode) {
     emit('update:allMode', false)
   }
@@ -51,6 +49,44 @@ const select = (val: string) => {
   emit('update:modelValue', next)
 }
 
+const updateDropdownPosition = () => {
+  if (!selectRef.value || !isOpen.value) return
+  const rect = selectRef.value.getBoundingClientRect()
+  const dropdownH = 240
+  const spaceBelow = window.innerHeight - rect.bottom
+  const spaceAbove = rect.top
+
+  if (spaceBelow < dropdownH && spaceAbove > spaceBelow) {
+    dropdownStyle.value = {
+      position: 'fixed',
+      left: rect.left + 'px',
+      bottom: (window.innerHeight - rect.top) + 'px',
+      width: rect.width + 'px',
+      zIndex: '9999',
+    }
+  } else {
+    dropdownStyle.value = {
+      position: 'fixed',
+      left: rect.left + 'px',
+      top: rect.bottom + 4 + 'px',
+      width: rect.width + 'px',
+      zIndex: '9999',
+    }
+  }
+}
+
+watch(isOpen, async (v) => {
+  if (v) {
+    await nextTick()
+    updateDropdownPosition()
+    window.addEventListener('scroll', updateDropdownPosition, true)
+    window.addEventListener('resize', updateDropdownPosition)
+  } else {
+    window.removeEventListener('scroll', updateDropdownPosition, true)
+    window.removeEventListener('resize', updateDropdownPosition)
+  }
+})
+
 const handleClickOutside = (e: MouseEvent) => {
   if (selectRef.value && !selectRef.value.contains(e.target as Node)) {
     isOpen.value = false
@@ -58,7 +94,11 @@ const handleClickOutside = (e: MouseEvent) => {
 }
 
 onMounted(() => document.addEventListener('click', handleClickOutside))
-onUnmounted(() => document.removeEventListener('click', handleClickOutside))
+onUnmounted(() => {
+  document.removeEventListener('click', handleClickOutside)
+  window.removeEventListener('scroll', updateDropdownPosition, true)
+  window.removeEventListener('resize', updateDropdownPosition)
+})
 
 const selectedLabel = computed(() => {
   if (props.allMode) return t('multiSelect.allAccounts')
@@ -75,26 +115,26 @@ const selectedLabel = computed(() => {
       <ChevronDown class="w-4 h-4 text-gray-400 transition-transform" :class="isOpen ? 'rotate-180' : ''" />
     </button>
 
-    <div v-if="isOpen" class="absolute z-[60] w-full mt-1 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800/60 shadow-lg py-1 max-h-60 overflow-y-auto">
-      <!-- All Accounts option (first, independent) -->
-      <button type="button" @click.stop="toggleAllMode"
-        class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800/50 flex items-center justify-between border-b border-gray-100 dark:border-gray-800/40 mb-1"
-        :class="allMode ? 'text-blue-600 dark:text-blue-400 bg-blue-50/50 dark:bg-blue-500/10' : 'text-gray-700 dark:text-gray-300'">
-        <span class="truncate font-medium">{{ t('multiSelect.allAccounts') }}</span>
-        <Check v-if="allMode" class="w-4 h-4 flex-shrink-0" />
-      </button>
-      <!-- Individual accounts -->
-      <button v-for="opt in options" :key="opt.value" type="button"
-        @click.stop="select(opt.value)"
-        class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800/50 flex items-center justify-between"
-        :class="[
-          allMode ? 'opacity-40 pointer-events-none' : '',
-          !allMode && modelValue.includes(opt.value) ? 'text-blue-600 dark:text-blue-400 bg-blue-50/50 dark:bg-blue-500/10' : 'text-gray-700 dark:text-gray-300'
-        ]">
-        <span class="truncate">{{ opt.label }}</span>
-        <Check v-if="!allMode && modelValue.includes(opt.value)" class="w-4 h-4 flex-shrink-0" />
-      </button>
-      <div v-if="!options.length" class="px-3 py-2 text-sm text-gray-400">{{ t('multiSelect.noOptions') }}</div>
-    </div>
+    <Teleport to="body">
+      <div v-if="isOpen" :style="dropdownStyle" class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800/60 shadow-lg py-1 max-h-60 overflow-y-auto">
+        <button type="button" @click.stop="toggleAllMode"
+          class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800/50 flex items-center justify-between border-b border-gray-100 dark:border-gray-800/40 mb-1"
+          :class="allMode ? 'text-blue-600 dark:text-blue-400 bg-blue-50/50 dark:bg-blue-500/10' : 'text-gray-700 dark:text-gray-300'">
+          <span class="truncate font-medium">{{ t('multiSelect.allAccounts') }}</span>
+          <Check v-if="allMode" class="w-4 h-4 flex-shrink-0" />
+        </button>
+        <button v-for="opt in options" :key="opt.value" type="button"
+          @click.stop="select(opt.value)"
+          class="w-full text-left px-3 py-2 text-sm hover:bg-gray-50 dark:hover:bg-gray-800/50 flex items-center justify-between"
+          :class="[
+            allMode ? 'opacity-40 pointer-events-none' : '',
+            !allMode && modelValue.includes(opt.value) ? 'text-blue-600 dark:text-blue-400 bg-blue-50/50 dark:bg-blue-500/10' : 'text-gray-700 dark:text-gray-300'
+          ]">
+          <span class="truncate">{{ opt.label }}</span>
+          <Check v-if="!allMode && modelValue.includes(opt.value)" class="w-4 h-4 flex-shrink-0" />
+        </button>
+        <div v-if="!options.length" class="px-3 py-2 text-sm text-gray-400">{{ t('multiSelect.noOptions') }}</div>
+      </div>
+    </Teleport>
   </div>
 </template>

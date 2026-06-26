@@ -74,6 +74,7 @@ class SignTaskCreate(BaseModel):
     range_start: Optional[str] = Field(None, description="Range start")
     range_end: Optional[str] = Field(None, description="Range end")
     notify_on_failure: bool = Field(True, description="Failure notification switch")
+    retry_count: Optional[int] = Field(None, description="Retry count per task, default 3")
 
     if field_validator is not None:
         @field_validator("name")
@@ -104,6 +105,7 @@ class SignTaskUpdate(BaseModel):
     range_start: Optional[str] = Field(None, description="Range start")
     range_end: Optional[str] = Field(None, description="Range end")
     notify_on_failure: Optional[bool] = Field(None, description="Failure notification switch")
+    retry_count: Optional[int] = Field(None, description="Retry count per task")
 
 
 class LastRunInfo(BaseModel):
@@ -127,6 +129,7 @@ class SignTaskOut(BaseModel):
     range_end: Optional[str] = None
     notify_on_failure: bool = True
     task_group_id: str = ""
+    retry_count: int = 3
     last_run_account_name: str = ""
 
 
@@ -215,12 +218,14 @@ async def create_sign_task(
             range_start=payload.range_start or "",
             range_end=payload.range_end or "",
             notify_on_failure=payload.notify_on_failure,
+            retry_count=payload.retry_count,
         )
 
         from backend.scheduler import sync_jobs
 
-        await sync_jobs()
-        await _restart_keyword_monitors()
+        # 调度同步和监控重启放到后台执行，避免阻塞 HTTP 响应
+        asyncio.ensure_future(sync_jobs())
+        asyncio.ensure_future(_restart_keyword_monitors())
         return task
     except HTTPException:
         raise
@@ -231,6 +236,78 @@ async def create_sign_task(
         ) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"创建任务失败: {str(e)}")
+
+
+class BatchCreateResponse(BaseModel):
+    tasks: List[SignTaskOut]
+    count: int
+
+
+@router.post("/batch", response_model=BatchCreateResponse, status_code=status.HTTP_201_CREATED)
+async def create_sign_tasks_batch(
+    payload: SignTaskCreate,
+    current_user=Depends(get_current_user),
+):
+    """批量创建任务：每个 chat 拆分为独立任务"""
+    try:
+        chats_dict = [_model_dump(chat) for chat in payload.chats]
+        if len(chats_dict) <= 1:
+            # 单个 chat，退化为普通创建
+            task = get_sign_task_service().create_task(
+                task_name=payload.name,
+                account_name=payload.account_name,
+                account_names=payload.account_names,
+                sign_at=payload.sign_at,
+                chats=chats_dict,
+                random_seconds=payload.random_seconds,
+                sign_interval=payload.sign_interval,
+                execution_mode=payload.execution_mode or "fixed",
+                range_start=payload.range_start or "",
+                range_end=payload.range_end or "",
+                notify_on_failure=payload.notify_on_failure,
+                retry_count=payload.retry_count,
+            )
+            return BatchCreateResponse(tasks=[task], count=1)
+
+        created = []
+        base_name = payload.name
+        for i, chat in enumerate(chats_dict):
+            chat_name = chat.get("name", f"chat_{chat.get('chat_id', i)}")
+            task_name = f"{base_name}_{i + 1}" if len(chats_dict) > 1 else base_name
+            source_account = chat.get("source_account") or payload.account_name
+            task = get_sign_task_service().create_task(
+                task_name=task_name,
+                account_name=source_account,
+                account_names=[source_account] if source_account else payload.account_names,
+                sign_at=payload.sign_at,
+                chats=[chat],
+                random_seconds=payload.random_seconds,
+                sign_interval=payload.sign_interval,
+                execution_mode=payload.execution_mode or "fixed",
+                range_start=payload.range_start or "",
+                range_end=payload.range_end or "",
+                notify_on_failure=payload.notify_on_failure,
+                retry_count=payload.retry_count,
+            )
+            created.append(task)
+
+        from backend.scheduler import sync_jobs
+
+        asyncio.ensure_future(sync_jobs())
+        asyncio.ensure_future(_restart_keyword_monitors())
+        return BatchCreateResponse(tasks=created, count=len(created))
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        ) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"批量创建任务失败: {str(e)}")
+
+
+
 
 
 @router.get("/{task_name}", response_model=SignTaskOut)
@@ -305,12 +382,13 @@ async def update_sign_task(
             range_start=payload.range_start,
             range_end=payload.range_end,
             notify_on_failure=payload.notify_on_failure,
+            retry_count=payload.retry_count,
         )
 
         from backend.scheduler import sync_jobs
 
-        await sync_jobs()
-        await _restart_keyword_monitors()
+        asyncio.ensure_future(sync_jobs())
+        asyncio.ensure_future(_restart_keyword_monitors())
         return task
     except HTTPException:
         raise
@@ -336,8 +414,8 @@ async def delete_sign_task(
 
         from backend.scheduler import sync_jobs
 
-        await sync_jobs()
-        await _restart_keyword_monitors()
+        asyncio.ensure_future(sync_jobs())
+        asyncio.ensure_future(_restart_keyword_monitors())
         return {"ok": True}
     except HTTPException:
         raise

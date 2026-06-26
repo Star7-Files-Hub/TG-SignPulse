@@ -19,8 +19,103 @@ TG-SignPulse 是一个 **AI Vibe Coding 技术学习项目**，用于探索和�
 - AI/LLM API 集成（OpenAI 兼容接口调用）
 - 任务调度系统设计（APScheduler）
 - Web 认证方案（JWT + TOTP 2FA）
+- 数据库支持：SQLite（默认）/ PostgreSQL（可选）
 
 本项目是作者在学习 AI 辅助编程（Vibe Coding）过程中的练手作品，旨在通过一个完整的全栈项目来实践 AI 驱动的开发流程。项目代码主要由 AI 辅助生成，用于展示 AI 编程工具在实际项目中的应用效果。
+
+---
+
+## 快速部署
+
+### 系统要求
+
+- **操作系统**: Debian 11+ / Ubuntu 20.04+
+- **内存**: 最低 512MB，推荐 1GB+
+- **Python**: 3.10+
+- **Node.js**: 20+（仅构建前端时需要）
+
+### 一键部署
+
+```bash
+# 1. 上传并解压项目
+tar -xzf tg-signpulse.tar.gz
+mkdir -p /root/tg-signpulse
+cp -r tg-signpulse/* /root/tg-signpulse/
+
+# 2. 运行部署脚本
+cd /root/tg-signpulse
+chmod +x deploy.sh
+sudo ./deploy.sh
+```
+
+部署完成后访问 `http://服务器IP:8080`，管理员密码存储在 `/data/tg-signpulse/.admin_bootstrap_password`。
+
+### 使用 PostgreSQL（可选）
+
+部署前设置环境变量即可自动切换：
+
+```bash
+export DATABASE_URL="postgresql://user:password@localhost:5432/tg_signpulse"
+sudo -E ./deploy.sh
+```
+
+或部署后手动切换，参见下方【数据库切换】。
+
+### 配置 AI 模型
+
+项目支持 AI 识图/计算等动作，需在 Settings 页面配置 OpenAI API Key，或在 `.env` 中设置：
+
+```bash
+echo 'OPENAI_API_KEY=sk-xxx' >> /opt/tg-signpulse/.env
+echo 'OPENAI_BASE_URL=https://api.openai.com/v1' >> /opt/tg-signpulse/.env
+echo 'OPENAI_MODEL=gpt-4o' >> /opt/tg-signpulse/.env
+systemctl restart tg-signpulse
+```
+
+### 数据库切换
+
+**从 SQLite 迁移到 PostgreSQL：**
+
+```bash
+# 安装 PostgreSQL
+apt install -y postgresql postgresql-client libpq-dev
+systemctl start postgresql
+
+# 创建数据库和用户
+sudo -u postgres psql -c "CREATE USER tguser WITH PASSWORD 'yourpass';"
+sudo -u postgres psql -c "CREATE DATABASE tg_signpulse OWNER tguser;"
+
+# 迁移数据
+pgloader sqlite:////data/tg-signpulse/db.sqlite postgresql://tguser:yourpass@localhost/tg_signpulse
+
+# 配置应用
+cd /opt/tg-signpulse
+source venv/bin/activate
+pip install -e ".[postgresql]"
+echo 'DATABASE_URL=postgresql://tguser:yourpass@localhost:5432/tg_signpulse' >> .env
+systemctl restart tg-signpulse
+```
+
+### 常用运维命令
+
+```bash
+systemctl start tg-signpulse      # 启动
+systemctl stop tg-signpulse       # 停止
+systemctl restart tg-signpulse    # 重启
+systemctl status tg-signpulse     # 状态
+journalctl -u tg-signpulse -f     # 实时日志
+```
+
+### 更新代码后重新构建
+
+```bash
+cd /opt/tg-signpulse
+# 后端：直接重启即可（Python 热加载）
+systemctl restart tg-signpulse
+
+# 前端：需要重新构建
+cd frontend && npm install && npx vite build && cp -r dist/* /web/
+```
 
 ---
 
@@ -41,7 +136,7 @@ TG-SignPulse 是一个 **AI Vibe Coding 技术学习项目**，用于探索和�
 | 层级 | 技术 |
 |------|------|
 | 前端 | Vue 3、Vue Router、Pinia、Tailwind CSS 4、Vite |
-| 后端 | FastAPI、Uvicorn、SQLAlchemy、SQLite、APScheduler |
+| 后端 | FastAPI、Uvicorn、SQLAlchemy、SQLite/PostgreSQL、APScheduler |
 | 认证 | JWT、TOTP 2FA、bcrypt |
 | AI 集成 | OpenAI SDK（API 调用示例） |
 | 第三方 API | Pyrogram（Telegram MTProto 协议学习） |

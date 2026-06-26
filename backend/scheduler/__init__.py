@@ -52,7 +52,7 @@ def create_cron_trigger(cron_str: str) -> CronTrigger:
 async def _job_run_task(task_id: int) -> None:
     db: Session = get_session_local()()
     try:
-        # 这里的查询是同步的，对于 SQLite 且任务量不大可以接受
+        # 此查询是同步的，在 SQLite/PostgreSQL 都是轻量操作
         task = db.query(Task).filter(Task.id == task_id).first()
         if not task or not task.enabled:
             return
@@ -164,6 +164,20 @@ async def sync_jobs() -> None:
     if scheduler is None:
         return
 
+    # 每次同步时检查时区是否变更，自动更新调度器时区
+    try:
+        from backend.services.config import get_config_service
+        from backend.core.config import get_settings
+
+        saved_settings = get_config_service().get_global_settings()
+        saved_tz = saved_settings.get("timezone")
+        desired_tz = saved_tz or get_settings().timezone
+        scheduler_tz = str(getattr(scheduler, 'timezone', ''))
+        if desired_tz and desired_tz != scheduler_tz:
+            scheduler.configure(timezone=desired_tz)
+    except Exception:
+        pass
+
     from backend.services.sign_tasks import get_sign_task_service
 
     db: Session = get_session_local()()
@@ -253,10 +267,20 @@ async def init_scheduler(sync_on_startup: bool = True) -> AsyncIOScheduler:
     global scheduler
     if scheduler is None:
         from backend.core.config import get_settings
+        from backend.services.config import get_config_service
 
         settings = get_settings()
+        # 优先使用 Web UI 保存的时区，否则使用环境变量
+        tz = settings.timezone
+        try:
+            saved_settings = get_config_service().get_global_settings()
+            saved_tz = saved_settings.get("timezone")
+            if saved_tz:
+                tz = saved_tz
+        except Exception:
+            pass
         scheduler = AsyncIOScheduler(
-            timezone=settings.timezone,
+            timezone=tz,
             job_defaults={
                 "misfire_grace_time": 3600,  # 允许任务延迟 1 小时执行
                 "coalesce": True,  # 合并积压的执行

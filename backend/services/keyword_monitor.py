@@ -742,6 +742,24 @@ class KeywordMonitorService:
         sender: str,
         url: str,
     ) -> Dict[str, str]:
+        # 提取动态数字（红包等场景）
+        number = ""
+        extract_pattern = rule.action.get("extract_pattern") if isinstance(rule.action, dict) else None
+        if extract_pattern:
+            try:
+                m = re.search(str(extract_pattern), text)
+                if m:
+                    number = m.group(1) if m.lastindex else m.group()
+            except re.error:
+                pass
+
+        # 随机回复（从预设列表中选取）
+        auto_reply_list = rule.action.get("auto_reply_list") if isinstance(rule.action, dict) else None
+        random_reply = ""
+        if isinstance(auto_reply_list, list) and auto_reply_list:
+            import random
+            random_reply = random.choice(auto_reply_list)
+
         return {
             "keyword": matched,
             "message": text,
@@ -753,6 +771,8 @@ class KeywordMonitorService:
             "url": url,
             "task_name": rule.task_name,
             "account_name": account_name,
+            "number": number,
+            "random_reply": random_reply,
         }
 
     def _continue_actions(self, action: Dict[str, Any]) -> list[Dict[str, Any]]:
@@ -1447,6 +1467,58 @@ class KeywordMonitorService:
                 )
             self._append_rule_log(rule, "关键词命中后续动作全部执行完成")
 
+    async def _click_red_packet_button(
+        self, *, client: Any, rule: KeywordMonitorRule, message: Message
+    ) -> None:
+        """自动点击消息中的红包按钮"""
+        reply_markup = getattr(message, "reply_markup", None)
+        if not reply_markup:
+            return
+
+        red_packet_keywords = ["红包", "red", "packet", "luck", "claim", "open", "grab", "领取", "抢", "🧧"]
+        try:
+            from pyrogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
+
+            if isinstance(reply_markup, InlineKeyboardMarkup):
+                for row in reply_markup.inline_keyboard:
+                    for btn in row:
+                        btn_text = getattr(btn, "text", "") or ""
+                        if any(kw.lower() in btn_text.lower() for kw in red_packet_keywords):
+                            self._append_rule_log(rule, f"红包模式：点击按钮 [{btn_text}]")
+                            await self._click_inline_button(client, message, btn)
+                            return
+            elif isinstance(reply_markup, ReplyKeyboardMarkup):
+                for row in reply_markup.keyboard:
+                    for btn in row:
+                        btn_text = btn if isinstance(btn, str) else getattr(btn, "text", "")
+                        if any(kw.lower() in btn_text.lower() for kw in red_packet_keywords):
+                            self._append_rule_log(rule, f"红包模式：点击回复按钮 [{btn_text}]")
+                            await client.send_message(
+                                chat_id=message.chat.id,
+                                text=btn_text,
+                                message_thread_id=getattr(message, "message_thread_id", None),
+                            )
+                            return
+        except Exception as exc:
+            self._append_rule_log(rule, f"红包按钮点击失败: {exc}")
+
+    async def _send_red_packet_reply(
+        self, *, client: Any, rule: KeywordMonitorRule, message: Message, reply_text: str
+    ) -> None:
+        """发送红包抢后的自动回复"""
+        if not reply_text:
+            return
+        try:
+            await asyncio.sleep(random.uniform(0.3, 0.8))
+            await client.send_message(
+                chat_id=message.chat.id,
+                text=reply_text,
+                message_thread_id=getattr(message, "message_thread_id", None),
+            )
+            self._append_rule_log(rule, f"红包自动回复已发送: {reply_text[:60]}")
+        except Exception as exc:
+            self._append_rule_log(rule, f"红包自动回复失败: {exc}")
+
     async def _on_message(self, account_name: str, client: Any, message: Message) -> None:
         try:
             from backend.services.config import get_config_service
@@ -1633,6 +1705,32 @@ class KeywordMonitorService:
                         f"关键词命中通知已处理：推送方式={push_channel}",
                     )
                 if continue_enabled:
+                    # 红包模式：延迟执行
+                    red_packet_delay = float(rule.action.get("red_packet_delay") or 0)
+                    red_packet_mode = rule.action.get("red_packet_mode")
+                    if red_packet_delay > 0:
+                        self._append_rule_log(
+                            rule,
+                            f"红包模式：等待 {red_packet_delay:g} 秒后执行",
+                        )
+                        await asyncio.sleep(red_packet_delay)
+
+                    # 红包按钮点击模式
+                    if red_packet_mode == "button":
+                        await self._click_red_packet_button(
+                            client=client,
+                            rule=rule,
+                            message=message,
+                        )
+                        # 发送随机回复
+                        if variables.get("random_reply"):
+                            await self._send_red_packet_reply(
+                                client=client,
+                                rule=rule,
+                                message=message,
+                                reply_text=variables["random_reply"],
+                            )
+
                     await self._execute_continue_actions(
                         account_name=account_name,
                         client=client,

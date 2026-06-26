@@ -284,6 +284,11 @@ class KeywordNotifyAction(SignAction):
     continue_message_thread_id: Optional[int] = None
     continue_action_interval: float = 1
     continue_actions: List[Dict[str, Any]] = Field(default_factory=list)
+    # 红包相关
+    extract_pattern: Optional[str] = None  # 正则表达式，用于提取动态数字（如从"/grab 682"中提取682）
+    auto_reply_list: List[str] = Field(default_factory=list)  # 自动回复内容列表（随机选取）
+    red_packet_delay: float = 0  # 抢红包延迟秒数
+    red_packet_mode: Optional[str] = None  # "button"(点按钮) / "keyword"(发关键词) / None(不启用红包模式)
 
 
 ActionT: TypeAlias = Union[
@@ -415,6 +420,7 @@ class SignConfigV3(BaseJSONConfig):
     sign_at: str  # 签到时间，time或crontab表达式
     random_seconds: int = 0
     sign_interval: int = 1  # 连续签到的间隔时间，单位秒
+    retry_count: Optional[int] = None  # 每个任务独立的重试次数，None 则使用环境变量默认值
 
     @property
     def requires_ai(self) -> bool:

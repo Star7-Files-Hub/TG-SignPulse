@@ -99,6 +99,20 @@ class BackendUserSigner(UserSigner):
     def ask_one(self):
         raise ValueError("后端模式下禁止交互式输入")
 
+    def ensure_ai_cfg(self):
+        """覆盖父类方法：后端模式下禁止交互式输入，配置缺失直接报错"""
+        from tg_signer.ai_tools import OpenAIConfigManager
+
+        cfg_manager = OpenAIConfigManager(self.workdir)
+        cfg = cfg_manager.load_config()
+        if not cfg:
+            raise ValueError(
+                "未配置 OpenAI API Key，无法执行 AI 相关动作。"
+                "请在设置页面中配置 AI 模型，"
+                "或在 .env 中设置 OPENAI_API_KEY 环境变量。"
+            )
+        return cfg
+
 
 class SignTaskService:
     """签到任务服务类"""
@@ -655,6 +669,7 @@ class SignTaskService:
         notify_on_failure: bool = True,
         task_group_id: str = "",
         last_run_account_name: str = "",
+        retry_count: int = 3,
     ) -> Dict[str, Any]:
         normalized_accounts = self._normalize_account_names(
             account_names, primary_account_name
@@ -677,6 +692,7 @@ class SignTaskService:
             "notify_on_failure": notify_on_failure,
             "task_group_id": task_group_id,
             "last_run_account_name": last_run_account_name,
+            "retry_count": retry_count,
         }
 
     def _aggregate_tasks(self, tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1465,7 +1481,7 @@ class SignTaskService:
         flow_logs: Optional[List[str]] = None,
     ):
         """保存任务执行历史 (保留列表)"""
-        from datetime import datetime
+        from datetime import datetime, timezone as tz
 
         history_file = self._history_file_path(task_name, account_name)
         normalized_logs, flow_truncated, flow_line_count = self._normalize_flow_logs(
@@ -1474,7 +1490,7 @@ class SignTaskService:
         last_target_message = extract_last_target_message(normalized_logs)
 
         new_entry = {
-            "time": datetime.now().isoformat(),
+            "time": datetime.now(tz.utc).isoformat(),
             "success": success,
             "message": self._repair_mojibake(message),
             "account_name": account_name,
@@ -2267,6 +2283,7 @@ class SignTaskService:
                 last_run_account_name=str(
                     (last_run or {}).get("account_name") or resolved_account_name
                 ),
+                retry_count=int(config.get("retry_count", 3)),
             )
         except Exception:
             return None
@@ -2303,6 +2320,7 @@ class SignTaskService:
         range_start: str = "",
         range_end: str = "",
         notify_on_failure: bool = True,
+        retry_count: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Create a sign task that can be shared by multiple accounts."""
         from backend.services.config import get_config_service
@@ -2351,6 +2369,7 @@ class SignTaskService:
                 "range_start": range_start,
                 "range_end": range_end,
                 "notify_on_failure": notify_on_failure,
+                "retry_count": retry_count if retry_count is not None else 3,
             }
 
             with open(task_dir / "config.json", "w", encoding="utf-8") as f:
@@ -2400,6 +2419,7 @@ class SignTaskService:
         range_start: Optional[str] = None,
         range_end: Optional[str] = None,
         notify_on_failure: Optional[bool] = None,
+        retry_count: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Update one task and fan out the config to all linked accounts."""
         task_name = validate_storage_name(task_name, field_name="task_name")
@@ -2470,6 +2490,11 @@ class SignTaskService:
             if notify_on_failure is not None
             else bool(existing.get("notify_on_failure", True))
         )
+        next_retry_count = (
+            retry_count
+            if retry_count is not None
+            else int(existing.get("retry_count", 3))
+        )
         should_schedule = next_execution_mode != "listen"
 
         existing_dirs = dict(self._iter_task_dirs(task_name, existing_accounts))
@@ -2510,6 +2535,7 @@ class SignTaskService:
                 "range_start": next_range_start,
                 "range_end": next_range_end,
                 "notify_on_failure": next_notify_on_failure,
+                "retry_count": next_retry_count,
             }
             last_run = existing_last_run_map.get(current_account)
             if last_run:

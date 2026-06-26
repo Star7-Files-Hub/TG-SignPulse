@@ -108,6 +108,7 @@ class Settings(BaseModel):
     timezone: str = "Asia/Hong_Kong"
     data_dir: Path = Field(default_factory=get_initial_data_dir)
     db_path: Optional[Path] = None
+    database_url_override: Optional[str] = None
     signer_workdir: Optional[Path] = None
     session_dir: Optional[Path] = None
     logs_dir: Optional[Path] = None
@@ -133,6 +134,7 @@ class Settings(BaseModel):
             timezone=_read_env(env, "TZ", "APP_TIMEZONE", default="Asia/Hong_Kong"),
             data_dir=_read_path_env(env, "APP_DATA_DIR") or get_initial_data_dir(),
             db_path=_read_path_env(env, "APP_DB_PATH"),
+            database_url_override=_read_env(env, "DATABASE_URL"),
             signer_workdir=_read_path_env(env, "APP_SIGNER_WORKDIR"),
             session_dir=_read_path_env(env, "APP_SESSION_DIR"),
             logs_dir=_read_path_env(env, "APP_LOGS_DIR"),
@@ -140,7 +142,17 @@ class Settings(BaseModel):
 
     @property
     def database_url(self) -> str:
+        # 如果设置了 DATABASE_URL 环境变量，直接使用（如 PostgreSQL）
+        if self.database_url_override:
+            return self.database_url_override
+        # 否则使用 SQLite（默认行为，向后兼容）
         return f"sqlite:///{self.resolve_db_path()}?check_same_thread=False"
+
+    @property
+    def is_database_sqlite(self) -> bool:
+        """判断当前是否使用 SQLite 数据库"""
+        url = self.database_url
+        return url.startswith("sqlite")
 
     def resolve_db_path(self) -> Path:
         return self.db_path or self.resolve_base_dir() / "db.sqlite"

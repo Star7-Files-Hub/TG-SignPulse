@@ -2,10 +2,11 @@
 import { ref, watch, nextTick } from 'vue'
 import { Loader2, RefreshCw } from 'lucide-vue-next'
 import Modal from '../Modal.vue'
-import { getSignTaskHistory } from '../../lib/api'
+import { getSignTaskHistory, getGlobalSettings } from '../../lib/api'
 import { useI18n } from '../../composables/useI18n'
 
 const { t } = useI18n()
+const logTimezone = ref('UTC')
 
 const props = defineProps<{
   isOpen: boolean
@@ -164,7 +165,15 @@ const disconnectWebSocket = () => {
   isRunning.value = false
 }
 
-watch(() => props.isOpen, (newVal) => {
+watch(() => props.isOpen, async (newVal) => {
+  if (newVal) {
+    // 获取时区设置
+    try {
+      const token = localStorage.getItem('tg-signer-token') || ''
+      const res = await getGlobalSettings(token)
+      if (res.timezone) logTimezone.value = res.timezone
+    } catch { }
+  }
   if (newVal) {
     // For "View Logs" mode (no runAccount): only show history, no realtime
     // For "Run" mode (runAccount set): only show realtime, history loads after task done
@@ -187,12 +196,15 @@ const formatDate = (dateStr: string) => {
   if (!dateStr) return '-'
   try {
     const d = new Date(dateStr)
-    const mo = String(d.getMonth() + 1).padStart(2, '0')
-    const da = String(d.getDate()).padStart(2, '0')
-    const ho = String(d.getHours()).padStart(2, '0')
-    const mi = String(d.getMinutes()).padStart(2, '0')
-    const se = String(d.getSeconds()).padStart(2, '0')
-    return `${mo}/${da} ${ho}:${mi}:${se}`
+    const tz = logTimezone.value || 'UTC'
+    const parts = new Intl.DateTimeFormat('sv-SE', {
+      timeZone: tz,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    }).formatToParts(d)
+    const get = (t: string) => parts.find(p => p.type === t)?.value || '00'
+    return `${get('month')}/${get('day')} ${get('hour')}:${get('minute')}:${get('second')}`
   } catch (e) {
     return dateStr
   }

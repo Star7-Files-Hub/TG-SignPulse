@@ -44,6 +44,8 @@ const messages: Record<string, Record<string, string>> = {
     // Tasks
     'tasks.empty': '还没有任务',
     'tasks.emptyHint': '点击右下角按钮创建第一个签到任务',
+    'tasks.timezone': '时区',
+    'tasks.changeTimezone': '点击更换时区',
     'tasks.notExecuted': '未执行',
     'tasks.continuousRunning': '持续运行',
     'tasks.success': '成功',
@@ -118,6 +120,19 @@ const messages: Record<string, Record<string, string>> = {
     'taskForm.aiPromptPlaceholder': 'AI 提示词 (可选)',
     'taskForm.addAction': '添加动作',
     'taskForm.notifyOnFailure': '失败时发送通知',
+    'taskForm.addChat': '添加会话',
+    'taskForm.autoDeleteAfter': '发送后 N 秒删除（可选）',
+    'taskForm.autoDeletePlaceholder': '留空不自动删除',
+    'taskForm.autoDelete': '秒删',
+    'taskForm.redPacket': '红包监听设置',
+    'taskForm.redPacketMode': '抢红包模式',
+    'taskForm.redPacketNone': '不启用',
+    'taskForm.redPacketButton': '自动点击按钮',
+    'taskForm.redPacketKeyword': '自动发送关键词',
+    'taskForm.redPacketDelay': '抢红包延迟（秒）',
+    'taskForm.extractPattern': '提取数字正则',
+    'taskForm.autoReplyList': '自动回复列表（每行一条，随机选取）',
+    'taskForm.autoReplyListPlaceholder': '谢谢老板\n老板大气',
 
     // Add/Edit Task Modal
     'taskModal.addTitle': '添加任务',
@@ -175,6 +190,7 @@ const messages: Record<string, Record<string, string>> = {
     'settings.proxy': '全局代理 (Proxy)',
     'settings.concurrency': 'Telegram 并发数',
     'settings.concurrencyPlaceholder': '推荐 1-3（默认 1）',
+    'settings.timezone': '时区',
     'settings.aiConfig': 'AI 模型配置',
     'settings.aiDesc': '用于执行需要语义理解的自动化任务。',
     'settings.testConnection': '测试连接',
@@ -334,6 +350,9 @@ const messages: Record<string, Record<string, string>> = {
     // Task Form extras
     'taskForm.refreshChats': '刷新列表',
     'taskForm.loadingChats': '加载会话中...',
+    'taskForm.sessionInvalid': '⚠️ 该账号登录已失效，请在账号管理中重新登录',
+    'taskForm.loadFailed': '⚠️ 加载会话列表失败，请检查网络后重试',
+    'taskForm.retryCount': '重试次数',
 
     // Logs detail translations
     'logs.detail.LOGIN_SUCCESS': '登录成功',
@@ -382,6 +401,8 @@ const messages: Record<string, Record<string, string>> = {
     // Tasks
     'tasks.empty': 'No tasks yet',
     'tasks.emptyHint': 'Click the button below to create your first task',
+    'tasks.timezone': 'Timezone',
+    'tasks.changeTimezone': 'Click to change timezone',
     'tasks.notExecuted': 'Not executed',
     'tasks.continuousRunning': 'Running',
     'tasks.success': 'Success',
@@ -456,6 +477,19 @@ const messages: Record<string, Record<string, string>> = {
     'taskForm.aiPromptPlaceholder': 'AI prompt (optional)',
     'taskForm.addAction': 'Add Action',
     'taskForm.notifyOnFailure': 'Notify on failure',
+    'taskForm.addChat': 'Add Chat',
+    'taskForm.autoDeleteAfter': 'Auto-delete after N seconds (optional)',
+    'taskForm.autoDeletePlaceholder': 'Leave empty for no auto-delete',
+    'taskForm.autoDelete': 'auto-delete',
+    'taskForm.redPacket': 'Red Packet Settings',
+    'taskForm.redPacketMode': 'Grab Mode',
+    'taskForm.redPacketNone': 'Disabled',
+    'taskForm.redPacketButton': 'Auto-click Button',
+    'taskForm.redPacketKeyword': 'Auto-send Keyword',
+    'taskForm.redPacketDelay': 'Grab Delay (seconds)',
+    'taskForm.extractPattern': 'Number Extract Regex',
+    'taskForm.autoReplyList': 'Auto Reply List (one per line, random)',
+    'taskForm.autoReplyListPlaceholder': 'Thanks\nGreat!',
 
     // Add/Edit Task Modal
     'taskModal.addTitle': 'Add Task',
@@ -513,6 +547,7 @@ const messages: Record<string, Record<string, string>> = {
     'settings.proxy': 'Global Proxy',
     'settings.concurrency': 'Telegram Concurrency',
     'settings.concurrencyPlaceholder': 'Recommended 1-3 (default 1)',
+    'settings.timezone': 'Timezone',
     'settings.aiConfig': 'AI Model Config',
     'settings.aiDesc': 'Used for automation tasks requiring semantic understanding.',
     'settings.testConnection': 'Test',
@@ -672,6 +707,9 @@ const messages: Record<string, Record<string, string>> = {
     // Task Form extras
     'taskForm.refreshChats': 'Refresh',
     'taskForm.loadingChats': 'Loading chats...',
+    'taskForm.sessionInvalid': '⚠️ Account session expired. Please re-login in Account Management.',
+    'taskForm.loadFailed': '⚠️ Failed to load chat list. Please check network and retry.',
+    'taskForm.retryCount': 'Retry Count',
 
     // Logs detail translations
     'logs.detail.LOGIN_SUCCESS': 'Login successful',

@@ -506,6 +506,7 @@ export interface GlobalSettings {
   telegram_bot_token?: string | null;
   telegram_bot_chat_id?: string | null;
   telegram_bot_message_thread_id?: number | null;
+  timezone?: string;
 }
 
 export const getGlobalSettings = (token: string) =>
@@ -743,6 +744,7 @@ export interface SignTask {
   notify_on_failure?: boolean;
   task_group_id?: string;
   last_run_account_name?: string;
+  retry_count?: number;
 }
 
 export interface CreateSignTaskRequest {
@@ -757,6 +759,7 @@ export interface CreateSignTaskRequest {
   range_start?: string;
   range_end?: string;
   notify_on_failure?: boolean;
+  retry_count?: number;
 }
 
 export interface UpdateSignTaskRequest {
@@ -769,6 +772,7 @@ export interface UpdateSignTaskRequest {
   range_start?: string;
   range_end?: string;
   notify_on_failure?: boolean;
+  retry_count?: number;
 }
 
 export interface ChatInfo {
@@ -804,6 +808,12 @@ export const getSignTask = (token: string, name: string, accountName?: string) =
 
 export const createSignTask = (token: string, data: CreateSignTaskRequest) =>
   request<SignTask>("/sign-tasks", {
+    method: "POST",
+    body: JSON.stringify(data),
+  }, token);
+
+export const createSignTasksBatch = (token: string, data: CreateSignTaskRequest) =>
+  request<{ tasks: SignTask[]; count: number }>("/sign-tasks/batch", {
     method: "POST",
     body: JSON.stringify(data),
   }, token);

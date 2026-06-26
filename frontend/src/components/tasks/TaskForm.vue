@@ -13,19 +13,36 @@ const emit = defineEmits<{ (e: 'update:payload', value: any): void }>()
 const accounts = ref<any[]>([])
 const selectedAccounts = ref<string[]>([])
 const allAccountsMode = ref(false)
-const selectedAccount = ref('')
 const accountOptions = computed(() => accounts.value.map(a => ({ label: a.name, value: a.name })))
 const scheduleMode = ref<'scheduled' | 'listen'>('scheduled')
 const timeRange = ref('08:00-19:00')
 const taskName = ref('')
+const retryCount = ref(3)
+
+// ---- 多会话支持 ----
+interface ChatEntry {
+  chat_id: number
+  name: string
+  source_account: string
+  message_thread_id: string
+  delete_after: number | null
+}
+const chatEntries = ref<ChatEntry[]>([])
+
+// 当前正在编辑的新会话（未加入列表前）
+const editingAccount = ref('')
 const availableChats = ref<any[]>([])
 const chatSearch = ref('')
 const chatSearchResults = ref<any[]>([])
 const chatSearchLoading = ref(false)
 const chatListRefreshing = ref(false)
-const selectedChatId = ref<number>(0)
-const selectedChatName = ref('')
-const messageThreadId = ref('')
+const chatListError = ref('')
+const editingChatId = ref<number>(0)
+const editingChatName = ref('')
+const editingThreadId = ref('')
+const editingDeleteAfter = ref<number | null>(null)
+
+// ---- 关键词监听 ----
 const listenerKeywords = ref('')
 const listenerMatchMode = ref('contains')
 const listenerPushChannel = ref('continue')
@@ -33,8 +50,14 @@ const listenerForwardChatId = ref('')
 const listenerForwardThreadId = ref('')
 const listenerBarkUrl = ref('')
 const listenerCustomUrl = ref('')
+const listenerExtractPattern = ref('')
+const listenerRedPacketMode = ref('')
+const listenerRedPacketDelay = ref(0)
+const listenerAutoReplyList = ref('')
+
 const actions = ref<any[]>([{ id: Date.now(), type: 'send_text', value: '', aiPrompt: '' }])
 
+// ============ 账号加载 ============
 const loadAccounts = async () => {
   try {
     const token = localStorage.getItem('tg-signer-token') || ''
@@ -42,6 +65,7 @@ const loadAccounts = async () => {
     accounts.value = res.accounts || []
     if (props.initialTask) {
       taskName.value = props.initialTask.name || ''
+      retryCount.value = props.initialTask.retry_count ?? 3
       scheduleMode.value = props.initialTask.execution_mode === 'listen' ? 'listen' : 'scheduled'
       if (props.initialTask.execution_mode === 'range') timeRange.value = props.initialTask.range_start + '-' + props.initialTask.range_end
       else timeRange.value = props.initialTask.sign_at || '08:00-19:00'
@@ -53,13 +77,18 @@ const loadAccounts = async () => {
         allAccountsMode.value = false
         selectedAccounts.value = taskAccs.filter((a: string) => accounts.value.some(acc => acc.name === a))
       }
-      selectedAccount.value = selectedAccounts.value[0] || (accounts.value[0]?.name || '')
+      // 读取所有 chats
       if (props.initialTask.chats?.length > 0) {
-        const chat = props.initialTask.chats[0]
-        selectedChatId.value = Number(chat.chat_id) || 0
-        selectedChatName.value = chat.name || ''
-        messageThreadId.value = chat.message_thread_id ? String(chat.message_thread_id) : ''
-        const la = chat.actions?.find((a: any) => a.action === 8)
+        chatEntries.value = props.initialTask.chats.map((c: any) => ({
+          chat_id: Number(c.chat_id) || 0,
+          name: c.name || '',
+          source_account: c.source_account || '',
+          message_thread_id: c.message_thread_id ? String(c.message_thread_id) : '',
+          delete_after: c.delete_after ?? null,
+        }))
+        // 解析 actions / listener
+        const firstChat = props.initialTask.chats[0]
+        const la = firstChat.actions?.find((a: any) => a.action === 8)
         if (la) {
           listenerKeywords.value = Array.isArray(la.keywords) ? la.keywords.join('\n') : ''
           listenerMatchMode.value = la.match_mode || 'contains'
@@ -68,62 +97,192 @@ const loadAccounts = async () => {
           listenerForwardThreadId.value = la.forward_message_thread_id ? String(la.forward_message_thread_id) : ''
           listenerBarkUrl.value = la.bark_url || ''
           listenerCustomUrl.value = la.custom_url || ''
+          listenerExtractPattern.value = la.extract_pattern || ''
+          listenerRedPacketMode.value = la.red_packet_mode || ''
+          listenerRedPacketDelay.value = Number(la.red_packet_delay) || 0
+          listenerAutoReplyList.value = Array.isArray(la.auto_reply_list) ? la.auto_reply_list.join('\n') : ''
           if (la.continue_actions) parseActions(la.continue_actions)
-        } else if (chat.actions) parseActions(chat.actions)
+        } else if (firstChat.actions) parseActions(firstChat.actions)
       }
     } else {
-      if (accounts.value.length > 0) { allAccountsMode.value = true; selectedAccounts.value = accounts.value.map(a => a.name); selectedAccount.value = selectedAccounts.value[0] || '' }
+      if (accounts.value.length > 0) {
+        allAccountsMode.value = true
+        selectedAccounts.value = accounts.value.map(a => a.name)
+        editingAccount.value = selectedAccounts.value[0] || ''
+      }
     }
-    if (selectedAccount.value) loadChats(selectedAccount.value)
+    if (editingAccount.value) loadChats(editingAccount.value)
   } catch (e) { console.error(e) }
 }
-const parseActions = (raw: any[]) => { const p: any[] = []; for (const a of raw) { if (a.delay) p.push({id:Date.now()+Math.random(),type:'delay',value:String(a.delay),aiPrompt:''}); if(a.action===1)p.push({id:Date.now()+Math.random(),type:'send_text',value:a.text||'',aiPrompt:''}); else if(a.action===3)p.push({id:Date.now()+Math.random(),type:'click_text_button',value:a.text||'',aiPrompt:''}); else if(a.action===4)p.push({id:Date.now()+Math.random(),type:'vision_click',value:'',aiPrompt:a.ai_prompt||''}); else if(a.action===5)p.push({id:Date.now()+Math.random(),type:'calc_send',value:'',aiPrompt:a.ai_prompt||''}); else if(a.action===6)p.push({id:Date.now()+Math.random(),type:'vision_send',value:'',aiPrompt:a.ai_prompt||''}); else if(a.action===7)p.push({id:Date.now()+Math.random(),type:'calc_click',value:'',aiPrompt:a.ai_prompt||''}); } if(p.length>0)actions.value=p }
+
+const parseActions = (raw: any[]) => {
+  const p: any[] = []
+  for (const a of raw) {
+    if (a.delay) p.push({ id: Date.now() + Math.random(), type: 'delay', value: String(a.delay), aiPrompt: '' })
+    if (a.action === 1) p.push({ id: Date.now() + Math.random(), type: 'send_text', value: a.text || '', aiPrompt: '' })
+    else if (a.action === 3) p.push({ id: Date.now() + Math.random(), type: 'click_text_button', value: a.text || '', aiPrompt: '' })
+    else if (a.action === 4) p.push({ id: Date.now() + Math.random(), type: 'vision_click', value: '', aiPrompt: a.ai_prompt || '' })
+    else if (a.action === 5) p.push({ id: Date.now() + Math.random(), type: 'calc_send', value: '', aiPrompt: a.ai_prompt || '' })
+    else if (a.action === 6) p.push({ id: Date.now() + Math.random(), type: 'vision_send', value: '', aiPrompt: a.ai_prompt || '' })
+    else if (a.action === 7) p.push({ id: Date.now() + Math.random(), type: 'calc_click', value: '', aiPrompt: a.ai_prompt || '' })
+  }
+  if (p.length > 0) actions.value = p
+}
+
+// ============ 会话加载 ============
 let loadChatsAbort: AbortController | null = null
 const loadChats = async (n: string, forceRefresh: boolean = false) => {
-  // Cancel previous request to avoid race conditions
   if (loadChatsAbort) { loadChatsAbort.abort(); loadChatsAbort = null }
   const controller = new AbortController()
   loadChatsAbort = controller
   chatListRefreshing.value = true
-  const token = localStorage.getItem('tg-signer-token')||''
+  chatListError.value = ''
+  const token = localStorage.getItem('tg-signer-token') || ''
   try {
     const result = await getAccountChats(token, n, forceRefresh)
     if (controller.signal.aborted) return
     availableChats.value = result || []
-  } catch(e: any) {
+    chatListError.value = ''
+  } catch (e: any) {
     if (controller.signal.aborted) return
-    console.error('loadChats failed:', e)
+    if (e?.status === 409 || e?.code === 'ACCOUNT_SESSION_INVALID' || (e?.message && (e.message.includes('登录已失效') || e.message.includes('session') || e.message.includes('Session')))) {
+      chatListError.value = t('taskForm.sessionInvalid')
+    } else {
+      chatListError.value = t('taskForm.loadFailed')
+    }
     availableChats.value = []
   } finally {
     if (loadChatsAbort === controller) { loadChatsAbort = null; chatListRefreshing.value = false }
   }
 }
-const refreshChats = async () => { if (!selectedAccount.value || chatListRefreshing.value) return; await loadChats(selectedAccount.value, true) }
-watch(selectedAccounts,(v)=>{if(v.length>0&&!v.includes(selectedAccount.value))selectedAccount.value=v[0];else if(v.length===0){selectedAccount.value='';availableChats.value=[]}})
-watch(selectedAccount, async (v)=>{
-  availableChats.value=[]
-  if(v) {
+const refreshChats = async () => { if (!editingAccount.value || chatListRefreshing.value) return; await loadChats(editingAccount.value, true) }
+
+watch(editingAccount, async (v) => {
+  availableChats.value = []
+  editingChatId.value = 0
+  editingChatName.value = ''
+  if (v) {
     await loadChats(v, false)
-    // If cache was empty and account didn't change, try force refresh
-    if (availableChats.value.length === 0 && v === selectedAccount.value) {
-      await loadChats(v, true)
-    }
+    if (availableChats.value.length === 0 && v === editingAccount.value) await loadChats(v, true)
   } else {
     chatListRefreshing.value = false
   }
 })
-let st:any=null
-watch(chatSearch,(v)=>{if(!v.trim()){chatSearchResults.value=[];return};if(st)clearTimeout(st);st=setTimeout(async()=>{chatSearchLoading.value=true;try{const t=localStorage.getItem('tg-signer-token')||'';const r=await searchAccountChats(t,selectedAccount.value,v.trim());chatSearchResults.value=r.items||[]}catch(e){console.error(e)}finally{chatSearchLoading.value=false}},300)})
-const selectChat=(c:any)=>{selectedChatId.value=c.id;selectedChatName.value=c.title||c.username||String(c.id);chatSearch.value='';chatSearchResults.value=[]}
-const addAction=()=>actions.value.push({id:Date.now(),type:'send_text',value:'',aiPrompt:''})
-const removeAction=(i:number)=>actions.value.splice(i,1)
-const moveAction=(i:number,d:number)=>{if(i+d<0||i+d>=actions.value.length)return;const t=actions.value[i];actions.value[i]=actions.value[i+d];actions.value[i+d]=t}
-const buildPayload=()=>{let em='fixed',sa='08:00',rs='',re='';if(scheduleMode.value==='listen')em='listen';else{const p=timeRange.value.split('-');if(p.length===2){em='range';rs=p[0].trim();re=p[1].trim();sa=rs}else sa=timeRange.value.trim()||'08:00'}
-const ba:any[]=[];for(const a of actions.value){const o:any={};if(a.type==='delay')continue;if(a.type==='send_text'){o.action=1;o.text=a.value}else if(a.type==='send_dice'){o.action=2;o.dice=a.value||'\uD83C\uDFB2'}else if(a.type==='click_text_button'){o.action=3;o.text=a.value}else if(a.type==='vision_click'){o.action=4;if(a.aiPrompt)o.ai_prompt=a.aiPrompt}else if(a.type==='calc_send'){o.action=5;if(a.aiPrompt)o.ai_prompt=a.aiPrompt}else if(a.type==='vision_send'){o.action=6;if(a.aiPrompt)o.ai_prompt=a.aiPrompt}else if(a.type==='calc_click'){o.action=7;if(a.aiPrompt)o.ai_prompt=a.aiPrompt};const prev=actions.value[actions.value.indexOf(a)-1];if(prev&&prev.type==='delay'&&prev.value)o.delay=prev.value;ba.push(o)}
-let ca=ba;if(scheduleMode.value==='listen'){const kw=listenerKeywords.value.split('\n').map((k: string)=>k.trim()).filter(Boolean);const la:any={action:8,keywords:kw,match_mode:listenerMatchMode.value,push_channel:listenerPushChannel.value};if(listenerPushChannel.value==='forward'){if(listenerForwardChatId.value)la.forward_chat_id=listenerForwardChatId.value;if(listenerForwardThreadId.value)la.forward_message_thread_id=listenerForwardThreadId.value};if(listenerPushChannel.value==='bark'&&listenerBarkUrl.value)la.bark_url=listenerBarkUrl.value;if(listenerPushChannel.value==='custom'&&listenerCustomUrl.value)la.custom_url=listenerCustomUrl.value;if(listenerPushChannel.value==='continue'&&ba.length>0)la.continue_actions=ba;ca=[la]}
-return{name:taskName.value||selectedChatName.value||`task_${Date.now()}`,account_name:selectedAccounts.value[0]||'',account_names:allAccountsMode.value ? ['*'] : selectedAccounts.value,sign_at:sa,execution_mode:em,range_start:rs,range_end:re,random_seconds:0,chats:[{chat_id:selectedChatId.value,name:selectedChatName.value,actions:ca,message_thread_id:messageThreadId.value?Number(messageThreadId.value):undefined,source_account:selectedAccount.value||undefined}]}}
-watch([taskName,selectedAccounts,allAccountsMode,scheduleMode,timeRange,selectedChatId,selectedChatName,messageThreadId,actions,listenerKeywords,listenerMatchMode,listenerPushChannel,listenerForwardChatId,listenerForwardThreadId,listenerBarkUrl,listenerCustomUrl],()=>{emit('update:payload',buildPayload())},{deep:true})
-onMounted(()=>{loadAccounts()})
+
+let st: any = null
+watch(chatSearch, (v) => {
+  if (!v.trim()) { chatSearchResults.value = []; return }
+  if (st) clearTimeout(st)
+  st = setTimeout(async () => {
+    chatSearchLoading.value = true
+    try {
+      const t = localStorage.getItem('tg-signer-token') || ''
+      const r = await searchAccountChats(t, editingAccount.value, v.trim())
+      chatSearchResults.value = r.items || []
+    } catch (e) { console.error(e) } finally { chatSearchLoading.value = false }
+  }, 300)
+})
+
+const selectChat = (c: any) => {
+  editingChatId.value = c.id
+  editingChatName.value = c.title || c.username || String(c.id)
+  chatSearch.value = ''
+  chatSearchResults.value = []
+}
+
+const addChatEntry = () => {
+  if (!editingChatId.value || !editingChatName.value || !editingAccount.value) return
+  // 防止重复添加
+  if (chatEntries.value.some(e => e.chat_id === editingChatId.value && e.source_account === editingAccount.value)) return
+  chatEntries.value.push({
+    chat_id: editingChatId.value,
+    name: editingChatName.value,
+    source_account: editingAccount.value,
+    message_thread_id: editingThreadId.value,
+    delete_after: editingDeleteAfter.value,
+  })
+  // 重置编辑区
+  editingChatId.value = 0
+  editingChatName.value = ''
+  editingThreadId.value = ''
+  editingDeleteAfter.value = null
+}
+
+const removeChatEntry = (i: number) => { chatEntries.value.splice(i, 1) }
+
+// ============ 动作管理 ============
+const addAction = () => actions.value.push({ id: Date.now(), type: 'send_text', value: '', aiPrompt: '' })
+const removeAction = (i: number) => actions.value.splice(i, 1)
+const moveAction = (i: number, d: number) => {
+  if (i + d < 0 || i + d >= actions.value.length) return
+  const tmp = actions.value[i]; actions.value[i] = actions.value[i + d]; actions.value[i + d] = tmp
+}
+
+// ============ 构建 payload ============
+const buildPayload = () => {
+  let em = 'fixed', sa = '08:00', rs = '', re = ''
+  if (scheduleMode.value === 'listen') em = 'listen'
+  else { const p = timeRange.value.split('-'); if (p.length === 2) { em = 'range'; rs = p[0].trim(); re = p[1].trim(); sa = rs } else sa = timeRange.value.trim() || '08:00' }
+  const ba: any[] = []
+  for (const a of actions.value) {
+    const o: any = {}
+    if (a.type === 'delay') continue
+    if (a.type === 'send_text') { o.action = 1; o.text = a.value }
+    else if (a.type === 'send_dice') { o.action = 2; o.dice = a.value || '🎲' }
+    else if (a.type === 'click_text_button') { o.action = 3; o.text = a.value }
+    else if (a.type === 'vision_click') { o.action = 4; if (a.aiPrompt) o.ai_prompt = a.aiPrompt }
+    else if (a.type === 'calc_send') { o.action = 5; if (a.aiPrompt) o.ai_prompt = a.aiPrompt }
+    else if (a.type === 'vision_send') { o.action = 6; if (a.aiPrompt) o.ai_prompt = a.aiPrompt }
+    else if (a.type === 'calc_click') { o.action = 7; if (a.aiPrompt) o.ai_prompt = a.aiPrompt }
+    const prev = actions.value[actions.value.indexOf(a) - 1]
+    if (prev && prev.type === 'delay' && prev.value) o.delay = prev.value
+    ba.push(o)
+  }
+  let ca = ba
+  if (scheduleMode.value === 'listen') {
+    const kw = listenerKeywords.value.split('\n').map((k: string) => k.trim()).filter(Boolean)
+    const la: any = { action: 8, keywords: kw, match_mode: listenerMatchMode.value, push_channel: listenerPushChannel.value }
+    if (listenerPushChannel.value === 'forward') { if (listenerForwardChatId.value) la.forward_chat_id = listenerForwardChatId.value; if (listenerForwardThreadId.value) la.forward_message_thread_id = listenerForwardThreadId.value }
+    if (listenerPushChannel.value === 'bark' && listenerBarkUrl.value) la.bark_url = listenerBarkUrl.value
+    if (listenerPushChannel.value === 'custom' && listenerCustomUrl.value) la.custom_url = listenerCustomUrl.value
+    if (listenerPushChannel.value === 'continue' && ba.length > 0) la.continue_actions = ba
+    // 红包模式
+    if (listenerExtractPattern.value) la.extract_pattern = listenerExtractPattern.value
+    if (listenerRedPacketMode.value) la.red_packet_mode = listenerRedPacketMode.value
+    if (listenerRedPacketDelay.value > 0) la.red_packet_delay = listenerRedPacketDelay.value
+    if (listenerAutoReplyList.value.trim()) la.auto_reply_list = listenerAutoReplyList.value.split('\n').map((s: string) => s.trim()).filter(Boolean)
+    ca = [la]
+  }
+  // 构建 chats 数组
+  const chats = chatEntries.value.length > 0
+    ? chatEntries.value.map(e => ({
+        chat_id: e.chat_id,
+        name: e.name,
+        actions: ca,
+        message_thread_id: e.message_thread_id ? Number(e.message_thread_id) : undefined,
+        source_account: e.source_account,
+        delete_after: e.delete_after ?? undefined,
+      }))
+    : [{ chat_id: editingChatId.value, name: editingChatName.value, actions: ca, message_thread_id: editingThreadId.value ? Number(editingThreadId.value) : undefined, source_account: editingAccount.value || undefined, delete_after: editingDeleteAfter.value ?? undefined }]
+
+  return {
+    name: taskName.value || (chatEntries.value[0]?.name || editingChatName.value || `task_${Date.now()}`),
+    account_name: selectedAccounts.value[0] || '',
+    account_names: allAccountsMode.value ? ['*'] : selectedAccounts.value,
+    sign_at: sa, execution_mode: em, range_start: rs, range_end: re,
+    random_seconds: 0, retry_count: retryCount.value, chats,
+  }
+}
+
+// 监听变化触发 payload 更新
+watch([
+  taskName, selectedAccounts, allAccountsMode, scheduleMode, timeRange, actions, retryCount,
+  chatEntries, editingChatId, editingChatName, editingThreadId, editingDeleteAfter, editingAccount,
+  listenerKeywords, listenerMatchMode, listenerPushChannel, listenerForwardChatId, listenerForwardThreadId, listenerBarkUrl, listenerCustomUrl,
+  listenerExtractPattern, listenerRedPacketMode, listenerRedPacketDelay, listenerAutoReplyList,
+], () => { emit('update:payload', buildPayload()) }, { deep: true })
+
+onMounted(() => { loadAccounts() })
 </script>
 <template>
   <div class="space-y-6 text-left">
@@ -144,16 +303,76 @@ onMounted(()=>{loadAccounts()})
         <label class="text-xs font-semibold text-gray-500 tracking-wide uppercase">{{ t('taskForm.timeRange') }}</label>
         <input v-model="timeRange" :disabled="scheduleMode === 'listen'" :placeholder="scheduleMode === 'listen' ? '24H' : t('taskForm.timeRangePlaceholder')" class="w-full h-10 px-3 text-sm border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 outline-none focus:border-gray-400 disabled:opacity-50 disabled:bg-gray-50 dark:disabled:bg-gray-950" />
       </div>
-    </div>
-    <div class="p-4 border border-sky-100 dark:border-gray-800/60 bg-sky-50/50 dark:bg-gray-900/40">
-      <h4 class="mb-4 text-xs font-bold uppercase tracking-widest text-sky-500">{{ t('taskForm.targetChat') }}</h4>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div class="space-y-1.5"><label class="text-xs font-medium text-gray-500">{{ t('taskForm.chatSourceAccount') }}</label><CustomSelect v-model="selectedAccount" :options="selectedAccounts.map(a => ({label: a, value: a}))" /></div>
-        <div class="space-y-1.5"><label class="text-xs font-medium text-gray-500 flex items-center justify-between">{{ t('taskForm.selectFromList') }}<button type="button" @click="refreshChats" :disabled="chatListRefreshing || !selectedAccount" class="flex items-center gap-1 text-[10px] text-sky-500 hover:text-sky-700 dark:hover:text-sky-300 font-medium disabled:opacity-50 disabled:cursor-not-allowed"><RefreshCw class="w-3 h-3" :class="chatListRefreshing ? 'animate-spin' : ''" /> {{ t('taskForm.refreshChats') }}</button></label><CustomSelect v-model="selectedChatId" :disabled="chatListRefreshing" :options="[{label: chatListRefreshing ? t('taskForm.loadingChats') : t('taskForm.selectChat'), value:0}, ...availableChats.map(c => ({label: c.title || c.username || c.id, value: c.id}))]" @update:modelValue="selectedChatName = availableChats.find(c => c.id === $event)?.title || availableChats.find(c => c.id === $event)?.username || String($event)" /></div>
-        <div class="space-y-1.5 relative"><label class="text-xs font-medium text-gray-500">{{ t('taskForm.searchChat') }}</label><div class="relative"><input v-model="chatSearch" :placeholder="t('taskForm.searchPlaceholder')" class="w-full h-10 px-3 text-sm border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-gray-400" /><div v-if="chatSearch.trim()" class="absolute top-11 left-0 right-0 z-10 max-h-40 overflow-y-auto bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800/60 shadow-lg"><div v-if="chatSearchLoading" class="p-3 text-xs text-gray-400">{{ t('taskForm.searching') }}</div><template v-else><div v-for="chat in chatSearchResults" :key="chat.id" @click="selectChat(chat)" class="p-2 border-b border-gray-100 dark:border-gray-800/60 hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer text-sm"><div class="font-medium truncate">{{ chat.title || chat.username || chat.id }}</div><div class="text-[10px] text-gray-400 font-mono">{{ chat.id }}</div></div><div v-if="!chatSearchResults.length" class="p-3 text-xs text-gray-400">{{ t('taskForm.noResults') }}</div></template></div></div></div>
-        <div class="space-y-1.5"><label class="text-xs font-medium text-gray-500">{{ t('taskForm.threadId') }}</label><input v-model="messageThreadId" :placeholder="t('taskForm.threadIdPlaceholder')" class="w-full h-10 px-3 text-sm border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-gray-400" /></div>
+      <div class="space-y-1.5">
+        <label class="text-xs font-semibold text-gray-500 tracking-wide uppercase">{{ t('taskForm.retryCount') }}</label>
+        <input v-model.number="retryCount" type="number" min="0" max="99" class="w-full h-10 px-3 text-sm border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 outline-none focus:border-gray-400" />
       </div>
     </div>
+
+    <!-- 目标会话 -->
+    <div class="p-4 border border-sky-100 dark:border-gray-800/60 bg-sky-50/50 dark:bg-gray-900/40">
+      <h4 class="mb-3 text-xs font-bold uppercase tracking-widest text-sky-500">{{ t('taskForm.targetChat') }}</h4>
+
+      <!-- 已添加的会话列表 -->
+      <div v-if="chatEntries.length > 0" class="space-y-2 mb-4">
+        <div v-for="(entry, idx) in chatEntries" :key="idx" class="flex items-center justify-between gap-2 p-2 bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800/60 text-sm">
+          <div class="flex-1 min-w-0">
+            <span class="font-medium truncate">{{ entry.name }}</span>
+            <span class="text-gray-400 ml-2 text-xs">@{{ entry.source_account }}</span>
+            <span v-if="entry.message_thread_id" class="text-gray-400 ml-2 text-xs">Topic: {{ entry.message_thread_id }}</span>
+            <span v-if="entry.delete_after" class="text-amber-500 ml-2 text-xs">{{ t('taskForm.autoDelete') }} {{ entry.delete_after }}s</span>
+          </div>
+          <button @click="removeChatEntry(idx)" class="p-1 text-gray-400 hover:text-rose-500 shrink-0"><Trash2 class="w-3.5 h-3.5" /></button>
+        </div>
+      </div>
+
+      <!-- 添加新会话 -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="space-y-1.5">
+          <label class="text-xs font-medium text-gray-500">{{ t('taskForm.chatSourceAccount') }}</label>
+          <CustomSelect v-model="editingAccount" :options="selectedAccounts.map(a => ({label: a, value: a}))" />
+        </div>
+        <div class="space-y-1.5">
+          <label class="text-xs font-medium text-gray-500 flex items-center justify-between">{{ t('taskForm.selectFromList') }}
+            <button type="button" @click="refreshChats" :disabled="chatListRefreshing || !editingAccount" class="flex items-center gap-1 text-[10px] text-sky-500 hover:text-sky-700 dark:hover:text-sky-300 font-medium disabled:opacity-50 disabled:cursor-not-allowed"><RefreshCw class="w-3 h-3" :class="chatListRefreshing ? 'animate-spin' : ''" /> {{ t('taskForm.refreshChats') }}</button>
+          </label>
+          <CustomSelect v-model="editingChatId" :disabled="chatListRefreshing" :options="[{label: chatListRefreshing ? t('taskForm.loadingChats') : t('taskForm.selectChat'), value:0}, ...availableChats.map(c => ({label: c.title || c.username || c.id, value: c.id}))]" @update:modelValue="editingChatName = availableChats.find(c => c.id === $event)?.title || availableChats.find(c => c.id === $event)?.username || String($event)" />
+          <p v-if="chatListError" class="text-xs text-amber-600 dark:text-amber-400 mt-1">{{ chatListError }}</p>
+        </div>
+        <div class="space-y-1.5 relative">
+          <label class="text-xs font-medium text-gray-500">{{ t('taskForm.searchChat') }}</label>
+          <div class="relative">
+            <input v-model="chatSearch" :placeholder="t('taskForm.searchPlaceholder')" class="w-full h-10 px-3 text-sm border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-gray-400" />
+            <div v-if="chatSearch.trim()" class="absolute top-11 left-0 right-0 z-10 max-h-40 overflow-y-auto bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800/60 shadow-lg">
+              <div v-if="chatSearchLoading" class="p-3 text-xs text-gray-400">{{ t('taskForm.searching') }}</div>
+              <template v-else>
+                <div v-for="chat in chatSearchResults" :key="chat.id" @click="selectChat(chat)" class="p-2 border-b border-gray-100 dark:border-gray-800/60 hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer text-sm"><div class="font-medium truncate">{{ chat.title || chat.username || chat.id }}</div><div class="text-[10px] text-gray-400 font-mono">{{ chat.id }}</div></div>
+                <div v-if="!chatSearchResults.length" class="p-3 text-xs text-gray-400">{{ t('taskForm.noResults') }}</div>
+              </template>
+            </div>
+          </div>
+        </div>
+        <div class="space-y-1.5">
+          <label class="text-xs font-medium text-gray-500">{{ t('taskForm.threadId') }}</label>
+          <input v-model="editingThreadId" :placeholder="t('taskForm.threadIdPlaceholder')" class="w-full h-10 px-3 text-sm border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-gray-400" />
+        </div>
+      </div>
+
+      <!-- 秒删 + 添加按钮 -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+        <div class="space-y-1.5">
+          <label class="text-xs font-medium text-gray-500">{{ t('taskForm.autoDeleteAfter') }}</label>
+          <input v-model.number="editingDeleteAfter" type="number" min="0" :placeholder="t('taskForm.autoDeletePlaceholder')" class="w-full h-10 px-3 text-sm border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 outline-none focus:border-gray-400" />
+        </div>
+        <div class="flex items-end">
+          <button @click="addChatEntry" :disabled="!editingChatId" class="w-full h-10 flex items-center justify-center gap-1.5 text-sm text-sky-600 dark:text-sky-400 border border-dashed border-sky-300 dark:border-sky-800 hover:border-sky-500 hover:bg-sky-50 dark:hover:bg-sky-500/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed">
+            <Plus class="w-4 h-4" /> {{ t('taskForm.addChat') }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 关键词监听 -->
     <div v-if="scheduleMode === 'listen'" class="p-4 border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900">
       <h4 class="mb-4 text-xs font-bold uppercase tracking-widest text-emerald-500">{{ t('taskForm.keywordListener') }}</h4>
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -164,27 +383,49 @@ onMounted(()=>{loadAccounts()})
         <div v-if="listenerPushChannel === 'bark'" class="md:col-span-2 space-y-1.5"><label class="text-xs font-medium text-gray-500">{{ t('taskForm.barkUrl') }}</label><input v-model="listenerBarkUrl" placeholder="https://api.day.app/xxx" class="w-full h-10 px-3 text-sm border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-gray-400" /></div>
         <div v-if="listenerPushChannel === 'custom'" class="md:col-span-2 space-y-1.5"><label class="text-xs font-medium text-gray-500">{{ t('taskForm.webhookUrl') }}</label><input v-model="listenerCustomUrl" :placeholder="t('taskForm.webhookPlaceholder')" class="w-full h-10 px-3 text-sm border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-gray-400" /></div>
       </div>
+      <!-- 红包模式 -->
+      <div class="pt-4 mt-4 border-t border-gray-100 dark:border-gray-800/60">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="text-xs font-semibold text-rose-500 uppercase tracking-wide">🧧 {{ t('taskForm.redPacket') }}</span>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="space-y-1.5">
+            <label class="text-xs font-medium text-gray-500">{{ t('taskForm.redPacketMode') }}</label>
+            <CustomSelect v-model="listenerRedPacketMode" :options="[
+              {label: t('taskForm.redPacketNone'), value:''},
+              {label: t('taskForm.redPacketButton'), value:'button'},
+              {label: t('taskForm.redPacketKeyword'), value:'keyword'},
+            ]" />
+          </div>
+          <div class="space-y-1.5">
+            <label class="text-xs font-medium text-gray-500">{{ t('taskForm.redPacketDelay') }}</label>
+            <input v-model.number="listenerRedPacketDelay" type="number" min="0" step="0.1" placeholder="0" class="w-full h-10 px-3 text-sm border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 outline-none focus:border-gray-400" />
+          </div>
+          <div class="space-y-1.5">
+            <label class="text-xs font-medium text-gray-500">{{ t('taskForm.extractPattern') }}</label>
+            <input v-model="listenerExtractPattern" placeholder="\d+" class="w-full h-10 px-3 text-xs font-mono border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 outline-none focus:border-gray-400" />
+          </div>
+          <div class="space-y-1.5">
+            <label class="text-xs font-medium text-gray-500">{{ t('taskForm.autoReplyList') }}</label>
+            <textarea v-model="listenerAutoReplyList" rows="2" :placeholder="t('taskForm.autoReplyListPlaceholder')" class="w-full p-2 text-xs border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-gray-400"></textarea>
+          </div>
+        </div>
+      </div>
     </div>
+
+    <!-- 动作序列 -->
     <div v-if="scheduleMode === 'scheduled' || listenerPushChannel === 'continue'" class="p-4 border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900">
       <h4 class="mb-4 text-xs font-bold uppercase tracking-widest text-violet-500">{{ t('taskForm.actionSequence') }}</h4>
       <div class="space-y-2">
         <div v-for="(action, idx) in actions" :key="action.id" class="flex items-center gap-2 p-2 sm:p-3 border border-gray-100 dark:border-gray-800/60 bg-gray-50/50 dark:bg-gray-950/50">
-          <!-- Action type select -->
           <div class="shrink-0 w-[120px] sm:w-[140px]">
             <CustomSelect v-model="action.type" :options="[
-              {label: t('taskForm.sendText'), value:'send_text'},
-              {label: t('taskForm.clickButton'), value:'click_text_button'},
-              {label: t('taskForm.sendDice'), value:'send_dice'},
-              {label: t('taskForm.aiVision'), value:'_ai_vision', disabled:true},
-              {label: t('taskForm.visionSend'), value:'vision_send', indent:true},
-              {label: t('taskForm.visionClick'), value:'vision_click', indent:true},
-              {label: t('taskForm.aiCalc'), value:'_ai_calc', disabled:true},
-              {label: t('taskForm.calcSend'), value:'calc_send', indent:true},
-              {label: t('taskForm.calcClick'), value:'calc_click', indent:true},
+              {label: t('taskForm.sendText'), value:'send_text'}, {label: t('taskForm.clickButton'), value:'click_text_button'}, {label: t('taskForm.sendDice'), value:'send_dice'},
+              {label: t('taskForm.aiVision'), value:'_ai_vision', disabled:true}, {label: t('taskForm.visionSend'), value:'vision_send', indent:true}, {label: t('taskForm.visionClick'), value:'vision_click', indent:true},
+              {label: t('taskForm.aiCalc'), value:'_ai_calc', disabled:true}, {label: t('taskForm.calcSend'), value:'calc_send', indent:true}, {label: t('taskForm.calcClick'), value:'calc_click', indent:true},
               {label: t('taskForm.delay'), value:'delay'},
             ]" className="w-full" />
           </div>
-          <!-- Value input -->
           <div class="flex-1 min-w-0">
             <input v-if="action.type === 'send_text' || action.type === 'click_text_button'" v-model="action.value" :placeholder="t('taskForm.textPlaceholder')" class="w-full h-9 px-2 text-xs border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-gray-400" />
             <input v-else-if="action.type === 'delay'" v-model="action.value" :placeholder="t('taskForm.delayPlaceholder')" class="w-full h-9 px-2 text-xs border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-gray-400" />
@@ -192,7 +433,6 @@ onMounted(()=>{loadAccounts()})
             <input v-else-if="['vision_send','vision_click','calc_send','calc_click'].includes(action.type)" v-model="action.aiPrompt" :placeholder="t('taskForm.aiPromptPlaceholder')" class="w-full h-9 px-2 text-xs border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-gray-400" />
             <span v-else class="h-9 flex items-center text-xs text-gray-400 px-2">-</span>
           </div>
-          <!-- Move & Delete -->
           <div class="flex items-center gap-0.5 shrink-0">
             <button type="button" @click="moveAction(idx, -1)" class="p-1 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"><ArrowUp class="w-3.5 h-3.5" /></button>
             <button type="button" @click="moveAction(idx, 1)" class="p-1 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"><ArrowDown class="w-3.5 h-3.5" /></button>

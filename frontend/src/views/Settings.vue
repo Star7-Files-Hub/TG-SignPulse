@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { getGlobalSettings, saveGlobalSettings, getTelegramConfig, saveTelegramConfig, resetTelegramConfig, getAIConfig, saveAIConfig, testAIConnection, exportAllConfigs, importAllConfigs } from '../lib/api'
+import CustomSelect from '../components/CustomSelect.vue'
 import { useI18n } from '../composables/useI18n'
 
 const { t } = useI18n()
@@ -16,8 +17,25 @@ const settings = ref({
   botTaskFailure: false,
   botToken: '',
   botChatId: '',
-  botThreadId: ''
+  botThreadId: '',
+  timezone: 'Asia/Shanghai'
 })
+
+const timezoneOptions = [
+  { label: 'Asia/Shanghai (UTC+8)', value: 'Asia/Shanghai' },
+  { label: 'Asia/Hong_Kong (UTC+8)', value: 'Asia/Hong_Kong' },
+  { label: 'Asia/Tokyo (UTC+9)', value: 'Asia/Tokyo' },
+  { label: 'Asia/Seoul (UTC+9)', value: 'Asia/Seoul' },
+  { label: 'Asia/Singapore (UTC+8)', value: 'Asia/Singapore' },
+  { label: 'America/New_York (UTC-5/-4)', value: 'America/New_York' },
+  { label: 'America/Chicago (UTC-6/-5)', value: 'America/Chicago' },
+  { label: 'America/Denver (UTC-7/-6)', value: 'America/Denver' },
+  { label: 'America/Los_Angeles (UTC-8/-7)', value: 'America/Los_Angeles' },
+  { label: 'Europe/London (UTC+0/+1)', value: 'Europe/London' },
+  { label: 'Europe/Berlin (UTC+1/+2)', value: 'Europe/Berlin' },
+  { label: 'Europe/Moscow (UTC+3)', value: 'Europe/Moscow' },
+  { label: 'UTC', value: 'UTC' },
+]
 
 const tgConfig = ref({
   api_id: '',
@@ -62,6 +80,7 @@ onMounted(async () => {
     settings.value.botToken = res.telegram_bot_token || ''
     settings.value.botChatId = res.telegram_bot_chat_id || ''
     settings.value.botThreadId = res.telegram_bot_message_thread_id ? String(res.telegram_bot_message_thread_id) : ''
+    settings.value.timezone = res.timezone || 'Asia/Shanghai'
 
     if (tgRes && tgRes.is_custom) {
       tgConfig.value.api_id = tgRes.api_id
@@ -90,6 +109,7 @@ const saveSettings = async () => {
       data_dir: settings.value.dataDir || null,
       global_proxy: settings.value.proxy || null,
       tg_global_concurrency: settings.value.concurrency || 1,
+      timezone: settings.value.timezone,
     })
     showToast(t('settings.saveSuccess'))
   } catch (e: any) {
@@ -257,6 +277,10 @@ const handleImport = async (e: Event) => {
             <div class="space-y-1.5">
               <label class="text-xs text-gray-500 block">{{ t('settings.concurrency') }}</label>
               <input v-model.number="settings.concurrency" type="number" min="1" max="10" :placeholder="t('settings.concurrencyPlaceholder')" class="w-full bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-transparent text-gray-900 dark:text-gray-200 px-3 py-2 text-sm outline-none transition-colors focus:bg-white dark:focus:bg-gray-800 placeholder:text-gray-400">
+            </div>
+            <div class="space-y-1.5">
+              <label class="text-xs text-gray-500 block">{{ t('settings.timezone') }}</label>
+              <CustomSelect v-model="settings.timezone" :options="timezoneOptions" className="w-full" />
             </div>
             <div class="pt-2">
               <button @click="saveSettings" :disabled="loading" class="w-full py-2 text-sm bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-950 hover:bg-gray-800 dark:hover:bg-white transition-colors disabled:opacity-50">{{ loading ? t('settings.saving') : t('settings.saveGeneral') }}</button>

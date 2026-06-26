@@ -615,6 +615,7 @@ class ConfigService:
             "telegram_bot_token": None,
             "telegram_bot_chat_id": None,
             "telegram_bot_message_thread_id": None,
+            "timezone": get_settings().timezone,
         }
 
         if not config_file.exists():

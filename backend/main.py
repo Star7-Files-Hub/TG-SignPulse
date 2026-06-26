@@ -14,7 +14,9 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-# Monkeypatch sqlite3.connect to increase default timeout
+# Monkeypatch sqlite3.connect to increase default timeout.
+# NOTE: This only affects Pyrogram's .session file (Telegram session storage),
+# NOT the application database. Needed regardless of PostgreSQL migration.
 _original_sqlite3_connect = sqlite3.connect
 
 

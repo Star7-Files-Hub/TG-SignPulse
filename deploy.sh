@@ -15,6 +15,8 @@ PROJECT_DIR="/opt/tg-signpulse"
 SERVICE_NAME="tg-signpulse"
 PYTHON_MIN_VERSION="3.10"
 NODE_MIN_VERSION="20"
+# 如果要使用 PostgreSQL，取消下面这行的注释并修改连接信息：
+# DATABASE_URL="postgresql://user:password@localhost:5432/tg_signpulse"
 # ------------------------------
 
 RED='\033[0;31m'
@@ -190,6 +192,13 @@ pip install --upgrade pip -q
 log_info "安装项目依赖（这可能需要几分钟）..."
 pip install -e . -q
 
+# 如果配置了 DATABASE_URL（PostgreSQL），安装 PostgreSQL 驱动
+if [[ -n "${DATABASE_URL:-}" ]] && [[ "$DATABASE_URL" == postgresql* ]]; then
+    log_info "检测到 PostgreSQL 配置，安装 psycopg2 ..."
+    apt install -y -qq libpq-dev &>/dev/null
+    pip install -e ".[postgresql]" -q
+fi
+
 # 修复 bcrypt 与 passlib 的兼容性问题
 # 新版 bcrypt 移除了 __about__ 属性，passlib 依赖它
 log_info "修复 bcrypt/passlib 兼容性..."
@@ -227,6 +236,12 @@ APP_TIMEZONE=$APP_TIMEZONE
 APP_CORS_ALLOW_ORIGINS=http://localhost:$APP_PORT,http://127.0.0.1:$APP_PORT
 EOF
 
+# 如果配置了 PostgreSQL，追加 DATABASE_URL
+if [[ -n "${DATABASE_URL:-}" ]]; then
+    echo "DATABASE_URL=$DATABASE_URL" >> "$PROJECT_DIR/.env"
+    log_info "已配置 PostgreSQL: ${DATABASE_URL%%@*}@***"
+fi
+
 log_info ".env 配置文件已生成"
 
 # ============================================================
@@ -261,14 +276,6 @@ Restart=always
 RestartSec=5
 StandardOutput=append:$APP_DATA_DIR/logs/app.log
 StandardError=append:$APP_DATA_DIR/logs/error.log
-
-# 安全加固
-NoNewPrivileges=yes
-PrivateTmp=yes
-ProtectSystem=strict
-ProtectHome=yes
-ReadWritePaths=$APP_DATA_DIR /web
-ReadOnlyPaths=$PROJECT_DIR
 
 [Install]
 WantedBy=multi-user.target
