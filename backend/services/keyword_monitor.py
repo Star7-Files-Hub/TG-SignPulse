@@ -459,6 +459,7 @@ class KeywordMonitorService:
         self._last_msg_time: dict[str, float] = {}    # account_name → 最后收到消息的时间
         self._last_heartbeat_time: float = 0.0
         self._heartbeat_task: Optional[asyncio.Task] = None
+        self._chat_link_cache: dict[str, tuple[float, str]] = {}  # chat_id → (timestamp, original_link)，供多级转发链追索原始链接
 
     async def _ensure_client_ready(self, client: Any) -> None:
         if getattr(client, "is_connected", False):
@@ -1919,6 +1920,10 @@ class KeywordMonitorService:
                     else None
                 )
                 if forward_chat_id is not None:
+                    logger.warning(
+                        "FWD_ENTRY [%s] push_channel=forward target=%s msg_chat=%s msg_id=%s text_len=%s",
+                        account_name, forward_chat_id, getattr(message.chat, 'id', ''), message.id, len(text or ""),
+                    )
                     try:
                         # === 两级去重：完全匹配 + 模糊匹配 ===
                         monitor_id = rule.task_name.replace("monitor:", "")
@@ -1989,6 +1994,15 @@ class KeywordMonitorService:
                                 k: v for k, v in self._forwarded_cache.items()
                                 if now - v < max(dedup_seconds * 2, 120)
                             }
+                            self._chat_link_cache = {
+                                k: v for k, v in self._chat_link_cache.items()
+                                if now - v[0] < 60
+                            }
+
+                        logger.warning(
+                            "FWD_DEDUP_PASS [%s] 去重已通过，准备转发 msg=%s chat=%s",
+                            account_name, message.id, getattr(message.chat, 'id', ''),
+                        )
 
                         forward_kwargs: dict[str, Any] = {}
                         forward_thread_id = _as_int_or_none(
@@ -1997,7 +2011,75 @@ class KeywordMonitorService:
                         if forward_thread_id is not None:
                             forward_kwargs["message_thread_id"] = forward_thread_id
 
-                        # ── forward_messages 原生转发（带「已转发」标识）──
+
+                        # ── 步骤 1：先计算原始链接（复用 _re3 + forward 属性 + 缓存）──
+                        # 优先级：
+                        # 1. 从消息文本提取已有的 🔗（上个转发链附加的）
+                        # 2. forward_from_chat（Pyrogram 转发属性，常为空）
+                        # 3. 进程内缓存 _chat_link_cache（上游转发者已存入的原始链接）
+                        # 4. 当前消息自身的链接（兜底）
+                        raw_chat_id = str(getattr(message.chat, 'id', ''))
+                        import re as _re3
+                        existing_link = None
+                        fwd_src_chat_id = None
+                        fwd_from_msg_id = 0
+                        fo_chat_id = None
+                        try:
+                            m = _re3.search(r'🔗\s*(https://t\.me/c/\d+/\d+)', text or '')
+                            if m:
+                                existing_link = m.group(1)
+                        except Exception:
+                            pass
+                        if existing_link:
+                            msg_link = existing_link
+                        else:
+                            fwd_from_msg_id = getattr(message, 'forward_from_message_id', None) or 0
+                            fwd_chat = getattr(message, 'forward_from_chat', None)
+                            fwd_src_chat_id = str(getattr(fwd_chat, 'id', '')) if fwd_chat else None
+                            if not fwd_src_chat_id:
+                                fwd_origin = getattr(message, 'forward_origin', None)
+                                if fwd_origin:
+                                    fo_chat = getattr(fwd_origin, 'chat', None)
+                                    if fo_chat:
+                                        fwd_src_chat_id = str(getattr(fo_chat, 'id', ''))
+                                        fo_chat_id = fwd_src_chat_id
+                            if fwd_src_chat_id and fwd_from_msg_id:
+                                clean_src = fwd_src_chat_id[4:] if fwd_src_chat_id.startswith("-100") else fwd_src_chat_id.lstrip("-")
+                                msg_link = f"https://t.me/c/{clean_src}/{fwd_from_msg_id}"
+                            elif fwd_from_msg_id:
+                                clean_chat = raw_chat_id[4:] if raw_chat_id.startswith("-100") else raw_chat_id.lstrip("-")
+                                msg_link = f"https://t.me/c/{clean_chat}/{fwd_from_msg_id}"
+                            else:
+                                # forward 属性全空 → 尝试从缓存中取（上游已存入）
+                                cached = self._chat_link_cache.pop(raw_chat_id, None)
+                                if cached:
+                                    _cache_ts, _cache_link = cached
+                                    if now - _cache_ts < 30:  # 30秒窗口
+                                        msg_link = _cache_link
+                                        logger.warning(
+                                            "FWD_LINK_CACHE_HIT [%s] chat=%s → cached_link=%s",
+                                            account_name, raw_chat_id, msg_link,
+                                        )
+                                    else:
+                                        clean_chat = raw_chat_id[4:] if raw_chat_id.startswith("-100") else raw_chat_id.lstrip("-")
+                                        msg_link = f"https://t.me/c/{clean_chat}/{message.id}"
+                                else:
+                                    clean_chat = raw_chat_id[4:] if raw_chat_id.startswith("-100") else raw_chat_id.lstrip("-")
+                                    msg_link = f"https://t.me/c/{clean_chat}/{message.id}"
+                        logger.warning(
+                            "FWD_LINK [%s] raw_chat=%s fwd_src_chat=%s fwd_msg_id=%s fo_chat=%s existing_link=%s final_link=%s text_has_emoji=%s",
+                            account_name, raw_chat_id, fwd_src_chat_id, fwd_from_msg_id, fo_chat_id, existing_link, msg_link,
+                            bool(re.search(r'🔗', text or '')),
+                        )
+
+                        # ── 步骤 2：写入缓存，供下游监听器提取原始链接 ──
+                        self._chat_link_cache[str(forward_chat_id)] = (now, msg_link)
+
+                        # ── 步骤 3：原生转发消息（带「已转发」标识）──
+                        logger.warning(
+                            "FWD_FORWARDING [%s] forward_messages → target=%s from_chat=%s msg_ids=[%s]",
+                            account_name, forward_chat_id, getattr(message.chat, 'id', ''), message.id,
+                        )
                         fwd_result = await self._call_client_with_retry(
                             client,
                             lambda _fid=forward_chat_id, _kw=dict(forward_kwargs):
@@ -2005,40 +2087,25 @@ class KeywordMonitorService:
                             operation=f"keyword monitor forward {forward_chat_id}",
                         )
 
-                        # 链接优先级：原始来源 > 当前消息
-                        # 如果大号的消息本身就是转发的（forward_from_chat），则链回真正的原始消息
-                        raw_chat_id = str(getattr(message.chat, 'id', ''))
-                        # 链接优先级：forward_from_chat > forward_origin > 当前消息
-                        # 处理多级转发链条（大号从群组转至频道，小号再从频道转出）
-                        fwd_from_chat = getattr(message, 'forward_from_chat', None)
-                        fwd_from_msg_id = getattr(message, 'forward_from_message_id', None)
-                        if not fwd_from_chat:
-                            fwd_origin = getattr(message, 'forward_origin', None)
-                            if fwd_origin:
-                                fwd_from_chat = getattr(fwd_origin, 'chat', None)
-                                fwd_from_msg_id = getattr(fwd_origin, 'message_id', 0) or getattr(message, 'forward_from_message_id', None)
-                        if fwd_from_chat and fwd_from_msg_id:
-                            src_chat_id = str(getattr(fwd_from_chat, 'id', ''))
-                            clean_src = src_chat_id[4:] if src_chat_id.startswith("-100") else src_chat_id.lstrip("-")
-                            msg_link = f"https://t.me/c/{clean_src}/{fwd_from_msg_id}"
-                        else:
-                            fwd_msg_id_val = getattr(message, 'forward_from_message_id', None) or 0
-                            if fwd_msg_id_val:
-                                clean_chat = raw_chat_id[4:] if raw_chat_id.startswith("-100") else raw_chat_id.lstrip("-")
-                                msg_link = f"https://t.me/c/{clean_chat}/{fwd_msg_id_val}"
-                            else:
-                                clean_chat = raw_chat_id[4:] if raw_chat_id.startswith("-100") else raw_chat_id.lstrip("-")
-                                msg_link = f"https://t.me/c/{clean_chat}/{message.id}"
+                        # ── 步骤 4：在转发消息下方发送原始链接 ──
                         await self._call_client_with_retry(
                             client,
                             lambda _fid=forward_chat_id, _link=msg_link, _kw=dict(forward_kwargs):
                                 client.send_message(_fid, f"🔗 {_link}", **_kw),
                             operation=f"keyword monitor link {forward_chat_id}",
                         )
+                        logger.warning(
+                            "FWD_LINK_SENT [%s] link=%s target=%s",
+                            account_name, msg_link, forward_chat_id,
+                        )
                         self._append_rule_log(
                             rule,
                             f"✅ 转发成功 → {chat_title}({raw_chat_id}) → {forward_chat_id}"
                             + (f"，话题ID={forward_thread_id}" if forward_thread_id is not None else ""),
+                        )
+                        logger.warning(
+                            "FWD_DONE [%s] chat=%s → target=%s link=%s",
+                            account_name, raw_chat_id, forward_chat_id, msg_link,
                         )
 
                         # ── Bot 通知 ──
