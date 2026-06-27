@@ -1,81 +1,47 @@
-<h1 align="center">TG-SignPulse</h1>
+# TG-Assistant
 
-<p align="center">
-  <strong>⚠️ This project is archived and no longer maintained ⚠️</strong>
-</p>
+A multi-functional Telegram automation helper — check-in, forwarding, red packet grabbing, Emby keep-alive, all in one place.
 
-<p align="center">
-  <a href="README_ZH.md">中文说明</a>
-</p>
+## ✨ Features
 
----
+| Module | Description |
+|--------|-------------|
+| 📊 **Dashboard** | Accounts / Tasks / Monitors / Failure overview |
+| 👤 **Accounts** | Multi-account login, session management, status check |
+| ⚡ **Tasks** | Scheduled check-in, AI vision click, custom action sequences, batch multi-chat |
+| 📻 **Monitors** | Real-time message monitoring, independent of tasks |
+| → 📨 **Forward** | Regex match → native forward, multi-account/channel, dedup, smart numeric compare |
+| → 🧧 **Red Packet** | Auto-click button / keyword grab, number extraction, delayed reply, templates |
+| 🎬 **Emby Keep** | Simulate watch sessions to keep Emby accounts active, Bemby-style UA presets |
+| 📋 **Logs** | Task logs / Audit logs / Monitor logs / Emby logs, real-time polling |
+| ⚙ **Settings** | Telegram API, Bot notifications, AI model, timezone, config import/export |
 
-## About
+## 🛠 Tech Stack
 
-TG-SignPulse is an **AI Vibe Coding learning project** created to explore and practice the integration of the following technology stacks:
+| Layer | Tech |
+|-------|------|
+| Backend | Python 3.10+ / FastAPI / Uvicorn / SQLAlchemy / SQLite/PostgreSQL |
+| Frontend | Vue 3 / Vite / TypeScript / Tailwind CSS |
+| Scheduler | APScheduler |
+| Telegram | Pyrogram (MTProto) |
+| AI | OpenAI-compatible API |
+| Container | Docker optional |
 
-- Frontend/backend separation architecture (Vue 3 + FastAPI)
-- Modern Python async programming patterns
-- AI/LLM API integration (OpenAI-compatible interface calls)
-- Task scheduling system design (APScheduler)
-- Web authentication (JWT + TOTP 2FA)
+## 🚀 Quick Deploy
 
-This project was built as a hands-on exercise during the author's exploration of AI-assisted programming (Vibe Coding). It demonstrates how AI coding tools can be applied in a full-stack project. The codebase was primarily generated with AI assistance, serving as a showcase of AI-driven development workflows.
+```bash
+mkdir -p /root/tg-signpulse
+tar -xzf tg-signpulse.tar.gz -C /root/tg-signpulse
+cd /root/tg-signpulse
+chmod +x deploy.sh
+sudo ./deploy.sh
+```
 
----
+Admin password:
+```bash
+cat /data/tg-signpulse/.admin_bootstrap_password
+```
 
-## Project Status
+## 📄 License
 
-> 🚫 **This project is discontinued and will not receive further updates.**
->
-> - No pre-built images or distributions of any kind are provided
-> - No new Issues or Pull Requests will be accepted
-> - The code is available solely for technical learning reference
-
----
-
-## Tech Stack
-
-Technologies used in this project, for learning reference:
-
-| Layer | Technology |
-|-------|-----------|
-| Frontend | Vue 3, Vue Router, Pinia, Tailwind CSS 4, Vite |
-| Backend | FastAPI, Uvicorn, SQLAlchemy, SQLite, APScheduler |
-| Auth | JWT, TOTP 2FA, bcrypt |
-| AI Integration | OpenAI SDK (API call examples) |
-| Third-party API | Pyrogram (Telegram MTProto protocol study) |
-
----
-
-## Learning Highlights
-
-This project can serve as a reference for:
-
-1. **Full-stack project structure** — Organizing a frontend/backend separated application
-2. **Async Python** — Practical use of FastAPI + asyncio
-3. **Task scheduling** — Integrating APScheduler in a web application
-4. **AI API calls** — Wrapping and using OpenAI-compatible interfaces
-5. **Authentication system** — Implementing JWT + 2FA
-6. **State management** — Using Pinia with Vue 3
-
----
-
-## Disclaimer
-
-- This project is intended solely for AI programming technique learning and exchange; it does not encourage or support any form of automation abuse
-- The author is not responsible for any consequences arising from the use of this code
-- No technical support or deployment services are provided
-- Third-party API calls in the code are included only as technical examples; users must comply with the relevant terms of service on their own
-
----
-
-## Acknowledgements
-
-The Telegram protocol interaction portion of this project references [tg-signer](https://github.com/amchii/tg-signer) by [amchii](https://github.com/amchii).
-
----
-
-## License
-
-[BSD-3-Clause](LICENSE)
+MIT License

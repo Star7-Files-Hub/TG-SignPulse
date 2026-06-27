@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# TG-SignPulse 一键部署脚本
+# TG-Assistant 一键部署脚本
 # 适用: Ubuntu 20.04+ / Debian 11+ 的 1c1g 云服务器
 # 用法: chmod +x deploy.sh && sudo ./deploy.sh
 # ============================================================
@@ -227,7 +227,7 @@ log_step "生成配置文件"
 SECRET_KEY=$($PYTHON_CMD -c "import secrets; print(secrets.token_urlsafe(48))")
 
 cat > "$PROJECT_DIR/.env" << EOF
-# TG-SignPulse 生产环境配置
+# TG-Assistant 生产环境配置
 APP_SECRET_KEY=$SECRET_KEY
 APP_PORT=$APP_PORT
 APP_HOST=$APP_HOST
@@ -262,7 +262,7 @@ fi
 
 cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
 [Unit]
-Description=TG-SignPulse Service
+Description=TG-Assistant Service
 After=network.target
 
 [Service]
@@ -329,7 +329,7 @@ log_step "部署完成!"
 
 echo ""
 echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║           TG-SignPulse 部署成功!                        ║${NC}"
+echo -e "${GREEN}║           TG-Assistant 部署成功!                        ║${NC}"
 echo -e "${GREEN}╠══════════════════════════════════════════════════════════╣${NC}"
 echo -e "${GREEN}║${NC}  访问地址:  ${BLUE}http://$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'YOUR_IP'):${APP_PORT}${NC}"
 echo -e "${GREEN}║${NC}  项目目录:  ${PROJECT_DIR}"

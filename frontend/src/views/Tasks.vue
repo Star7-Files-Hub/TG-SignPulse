@@ -24,6 +24,7 @@ const logsRunAccount = ref<string>('')  // Account that just executed the task
 const runMenuTask = ref<any>(null)
 const runMenuAccounts = ref<string[]>([])
 const allAccounts = ref<string[]>([])
+const showAccountPicker = ref<string | null>(null)
 
 const loadAllAccounts = async () => {
   const token = localStorage.getItem('tg-signer-token') || ''
@@ -99,6 +100,19 @@ const loadTasks = async () => {
         lastRunStr = `${task.last_run.success ? t('tasks.success') : t('tasks.failed')}-${formatDate(task.last_run.time)}`
       }
 
+      // Per-account last run map: account_name -> { time, success }
+      const perAccountRun: Record<string, { time: string; success: boolean } | null> = {}
+      const perAccRun = task.per_account_last_run || {}
+      for (const [acc, run] of Object.entries(perAccRun)) {
+        if (run && typeof run === 'object') {
+          perAccountRun[acc] = {
+            time: (run as any).time || '',
+            success: !!(run as any).success,
+          }
+        }
+      }
+
+      const perAccountEnabled = task.per_account_enabled || {}
       return {
         id: task.name,
         name: task.name,
@@ -110,6 +124,9 @@ const loadTasks = async () => {
         isListenMode: task.execution_mode === 'listen',
         chatAvatarUrl: '',
         chatName: firstChat ? (firstChat.name || `Chat ${firstChat.chat_id}`) : '',
+        accountNames: (task.account_names || []).filter((n: string) => n && n !== '*'),
+        perAccountRun,
+        perAccountEnabled,
         raw: task
       }
     })
@@ -202,12 +219,32 @@ watch(() => route.query.account, () => {
   loadTasks()
 })
 
+const toggleAccount = async (task: any, account: string) => {
+  const checked = task.accountNames.includes(account)
+  const newVal = !checked
+  const token = localStorage.getItem('tg-signer-token') || ''
+  try {
+    const baseUrl = import.meta.env.VITE_API_BASE || '/api'
+    await fetch(`${baseUrl}/sign-tasks/${encodeURIComponent(task.name)}/account-toggle`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ account_name: account, enabled: newVal }),
+    })
+    if (newVal) {
+      if (!task.accountNames.includes(account)) task.accountNames.push(account)
+      task.perAccountEnabled = { ...task.perAccountEnabled, [account]: true }
+    } else {
+      task.accountNames = task.accountNames.filter((a: string) => a !== account)
+      task.perAccountEnabled = { ...task.perAccountEnabled, [account]: false }
+    }
+  } catch { /* ignore */ }
+}
+
 const handleDelete = async (task: any) => {
   if (!confirm(`${t('tasks.deleteConfirm')} ${task.name} ?`)) return
   const token = localStorage.getItem('tg-signer-token') || ''
   try {
-    const accountName = getTaskAccountName(task.raw) || undefined
-    await deleteSignTask(token, task.name, accountName)
+    await deleteSignTask(token, task.name)  // 不传 accountName，删除所有账号下的副本
     await loadTasks()
   } catch (e: any) {
     alert(`${t('tasks.deleteFailed')}: ${e.message || t('tasks.unknownError')}`)
@@ -315,12 +352,44 @@ const openLogs = (task: any) => {
             </span>
           </div>
 
-          <!-- Row 2 (PC): Badges row - Schedule + Target + Last Run -->
+          <!-- Row 2 (PC): Badges row - Schedule + Accounts + Target + Last Run -->
           <div class="hidden sm:flex items-center gap-2">
             <!-- Schedule badge -->
             <span class="px-2 py-0.5 rounded text-xs font-mono bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border border-blue-100 dark:border-blue-800/50 truncate" :title="task.scheduleMode">
               {{ task.scheduleMode }}
             </span>
+            <!-- Account pills with checkbox + last-run (assigned + addable) -->
+            <div class="flex items-center gap-1 flex-wrap">
+              <label
+                v-for="acc in task.accountNames.slice(0, 4)" :key="acc"
+                class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-mono cursor-pointer hover:opacity-80 transition-colors"
+                :class="task.perAccountEnabled[acc] !== false ? 'bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300 border border-indigo-100 dark:border-indigo-800/50' : 'bg-gray-50 text-gray-400 dark:bg-gray-900/30 dark:text-gray-500 border border-dashed border-gray-200 dark:border-gray-700 line-through'"
+                :title="task.perAccountRun[acc] ? (task.perAccountRun[acc]!.success ? '✅' : '❌') + ' ' + task.perAccountRun[acc]!.time : '点击切换'"
+              >
+                <input type="checkbox" class="w-3 h-3 rounded" :checked="task.perAccountEnabled[acc] !== false" @click.stop @change="toggleAccount(task, acc)" />
+                <span class="ml-0.5">@{{ acc }}</span>
+                <span v-if="task.perAccountRun[acc]" class="ml-0.5" :class="task.perAccountRun[acc]!.success ? 'text-emerald-500' : 'text-rose-500'">●</span>
+              </label>
+              <span v-if="task.accountNames.length > 4" class="text-[10px] text-gray-400">+{{ task.accountNames.length - 4 }}</span>
+              <!-- Manage accounts button -->
+              <button
+                class="text-[10px] text-gray-400 hover:text-indigo-500 px-1 py-0.5 rounded border border-dashed border-gray-300 hover:border-indigo-300 cursor-pointer transition-colors"
+                @click.stop="showAccountPicker = showAccountPicker === task.id ? null : task.id"
+                title="管理账号"
+              >+/-</button>
+            </div>
+            <!-- Account picker panel -->
+            <div v-if="showAccountPicker === task.id" class="flex flex-wrap gap-1 mt-1 p-2 bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800 rounded">
+              <div class="text-[10px] text-gray-400 w-full mb-1">点击勾选/取消来添加或移除账号</div>
+              <label
+                v-for="acc in allAccounts" :key="acc"
+                class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-mono cursor-pointer hover:bg-white dark:hover:bg-gray-700 transition-colors"
+                :class="task.accountNames.includes(acc) ? 'bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300 border border-indigo-100 dark:border-indigo-800/50' : 'bg-white dark:bg-gray-800 text-gray-400 border border-gray-100 dark:border-gray-700'"
+              >
+                <input type="checkbox" class="w-3 h-3 rounded" :checked="task.accountNames.includes(acc)" @click.stop @change="toggleAccount(task, acc)" />
+                <span class="ml-0.5">@{{ acc }}</span>
+              </label>
+            </div>
             <!-- Target badge -->
             <span class="px-2 py-0.5 rounded text-xs font-mono bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300 border border-gray-200 dark:border-gray-700/50 truncate" :title="task.targetStr">
               {{ task.targetStr }}
@@ -336,11 +405,21 @@ const openLogs = (task: any) => {
             </span>
           </div>
 
-          <!-- Mobile Second Row: Schedule + Target -->
+          <!-- Mobile Second Row: Schedule + Account + Target -->
           <div class="flex sm:hidden items-center gap-2 w-full overflow-hidden">
             <span class="px-2 py-0.5 rounded text-[10px] font-mono bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 border border-blue-100 dark:border-blue-800/50 truncate" :title="task.scheduleMode">
               {{ task.scheduleMode }}
             </span>
+            <label
+              v-for="acc in task.accountNames.slice(0, 2)" :key="acc"
+              class="flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-mono bg-indigo-50 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300 border border-indigo-100 dark:border-indigo-800/50 cursor-pointer truncate"
+              :title="task.perAccountRun[acc] ? (task.perAccountRun[acc]!.success ? '✅' : '❌') + ' ' + task.perAccountRun[acc]!.time : '未执行'"
+            >
+              <input type="checkbox" class="w-2.5 h-2.5 rounded" :checked="task.perAccountEnabled[acc] !== false" @click.stop @change="toggleAccount(task, acc)" />
+              <span class="ml-0.5">@{{ acc }}</span>
+              <span v-if="task.perAccountRun[acc]" class="text-[8px]" :class="task.perAccountRun[acc]!.success ? 'text-emerald-500' : 'text-rose-500'">●</span>
+            </label>
+            <span v-if="task.accountNames.length > 2" class="text-[10px] text-gray-400">+{{ task.accountNames.length - 2 }}</span>
             <span class="px-2 py-0.5 rounded text-[10px] font-mono bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300 border border-gray-200 dark:border-gray-700/50 truncate" :title="task.targetStr">
               {{ task.targetStr }}
             </span>

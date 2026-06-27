@@ -4,6 +4,7 @@ from backend.api.routes import (
     accounts,
     auth,
     config,
+    emby,
     events,
     logs,
     monitors,
@@ -19,6 +20,7 @@ router.include_router(accounts.router, prefix="/accounts", tags=["accounts"])
 router.include_router(tasks.router, prefix="/tasks", tags=["tasks"])
 router.include_router(sign_tasks_v2.router, prefix="/sign-tasks", tags=["sign-tasks"])
 router.include_router(monitors.router, prefix="/monitors", tags=["monitors"])
+router.include_router(emby.router, prefix="/emby", tags=["emby"])
 router.include_router(logs.router, prefix="/logs", tags=["logs"])
 router.include_router(config.router, prefix="/config", tags=["config"])
 router.include_router(events.router, prefix="/events", tags=["events"])

@@ -53,6 +53,25 @@ class TelegramService:
         self.session_dir.mkdir(parents=True, exist_ok=True)
         self._accounts_cache: Optional[List[Dict[str, Any]]] = None
 
+    def _account_dir(self, account_name: str) -> Path:
+        """返回账号的隔离会话目录：sessions/{name}/"""
+        return self.session_dir / account_name
+
+    def _session_file(self, account_name: str, suffix: str = ".session") -> Path:
+        """新路径：sessions/{name}/{name}.session"""
+        return self._account_dir(account_name) / f"{account_name}{suffix}"
+
+    def _session_file_old(self, account_name: str, suffix: str = ".session") -> Path:
+        """旧路径（兼容期）：sessions/{name}.session"""
+        return self.session_dir / f"{account_name}{suffix}"
+
+    def _session_file_best(self, account_name: str, suffix: str = ".session") -> Path:
+        """优先返回新路径（已迁移），否则旧路径"""
+        new = self._session_file(account_name, suffix)
+        if new.exists():
+            return new
+        return self._session_file_old(account_name, suffix)
+
     @staticmethod
     def _normalize_account_name(account_name: str) -> str:
         return validate_storage_name(account_name, field_name="account_name")
@@ -141,11 +160,12 @@ class TelegramService:
             if name and status != "success":
                 pending_accounts.add(name)
 
-        # 扫描 session 目录
+        # 扫描 session 目录（包括按账号隔离的子目录）
         try:
             if is_string_session_mode():
                 seen = set()
-                for session_file in self.session_dir.glob("*.session_string"):
+                # 新路径：sessions/{name}/{name}.session_string
+                for session_file in self.session_dir.glob("*/*.session_string"):
                     account_name = session_file.stem
                     seen.add(account_name)
                     if account_name in pending_accounts:
@@ -186,7 +206,8 @@ class TelegramService:
                         }
                     )
             else:
-                for session_file in self.session_dir.glob("*.session"):
+                # 新路径：sessions/{name}/{name}.session
+                for session_file in self.session_dir.glob("*/*.session"):
                     account_name = session_file.stem  # 文件名（不含扩展名）
                     profile = get_account_profile(account_name)
 
@@ -251,7 +272,8 @@ class TelegramService:
                 return True
             return False
 
-        session_file = self.session_dir / f"{account_name}.session"
+        # Check new path (per-account dir) first, then old flat path
+        session_file = self._session_file_best(account_name)
         return session_file.exists()
 
     async def download_account_avatar(self, account_name: str) -> Optional[bytes]:
@@ -571,6 +593,37 @@ class TelegramService:
                     "needs_relogin": True,
                 }
             if "UNAUTHORIZED" in err_upper or "AUTH_KEY_UNREGISTERED" in err_upper:
+                # 密钥过期 → 调用会话恢复模块
+                try:
+                    from tools.session_recovery import recover_session
+                    recovery_result = await recover_session(
+                        account_name=account_name,
+                        session_dir=self.session_dir,
+                        proxy_dict=proxy_dict,
+                        timeout_seconds=timeout_seconds,
+                    )
+                    if recovery_result and recovery_result.get("ok"):
+                        recovery_result["checked_at"] = checked_at
+                        return recovery_result
+                    if recovery_result and recovery_result.get("needs_relogin"):
+                        set_account_status(
+                            account_name,
+                            status="invalid",
+                            message=recovery_result.get("message", err_text),
+                            code="ACCOUNT_SESSION_INVALID",
+                            needs_relogin=True,
+                        )
+                        return {
+                            "account_name": account_name,
+                            "ok": False,
+                            "status": "invalid",
+                            "message": recovery_result.get("message", err_text),
+                            "code": "ACCOUNT_SESSION_INVALID",
+                            "checked_at": checked_at,
+                            "needs_relogin": True,
+                        }
+                except Exception:
+                    pass
                 set_account_status(
                     account_name,
                     status="invalid",
@@ -930,14 +983,13 @@ class TelegramService:
                     # 但通常 "unable to open database file" 就是因为这个。
                     pass
 
-        session_path = str(self.session_dir / account_name)
+        session_path = str(self._account_dir(account_name) / account_name)
         client_kwargs = {
             "name": session_path,
             "api_id": api_id,
             "api_hash": api_hash,
             "proxy": proxy_dict,
             "in_memory": session_mode == "string",
-            # 手机号验证码登录不依赖 updates，关闭可减少 flood/timeout 噪音
             "no_updates": True,
         }
         client = Client(**client_kwargs)
@@ -1456,7 +1508,7 @@ class TelegramService:
                 except OSError:
                     pass
 
-        session_path = str(self.session_dir / account_name)
+        session_path = str(self._account_dir(account_name) / account_name)
         client_kwargs = {
             "name": session_path,
             "api_id": api_id,

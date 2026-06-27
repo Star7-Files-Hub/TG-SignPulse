@@ -135,3 +135,4 @@ frontend/.env.local
 
 # Claude Code worktrees (temporary per-session checkouts)
 .claude/worktrees/
+tg-signpulse.tar.gz 

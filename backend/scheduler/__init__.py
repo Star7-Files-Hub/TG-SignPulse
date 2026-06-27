@@ -73,11 +73,18 @@ async def _job_run_sign_task(account_name: str, task_name: str) -> None:
 
     logger = logging.getLogger("backend.scheduler")
     try:
-        logger.info(f"Scheduler: 正在运行签到任务 {task_name} (账号: {account_name})")
-
-        # 获取任务配置，检查是否为随机时间段模式
+        # 检查 per-account 启用状态
         sign_task_service = get_sign_task_service()
         task_config = sign_task_service.get_task(task_name, account_name)
+        if task_config:
+            pae = task_config.get("per_account_enabled", {})
+            if pae and pae.get(account_name) is False:
+                logger.info(
+                    f"Scheduler: 跳过 {task_name} (账号: {account_name}) — 已禁用"
+                )
+                return
+
+        logger.info(f"Scheduler: 正在运行签到任务 {task_name} (账号: {account_name})")
         if task_config and task_config.get("execution_mode") == "range":
             range_start_str = task_config.get("range_start")
             range_end_str = task_config.get("range_end")
@@ -165,6 +172,7 @@ async def sync_jobs() -> None:
         return
 
     # 每次同步时检查时区是否变更，自动更新调度器时区
+    tz_changed = False
     try:
         from backend.services.config import get_config_service
         from backend.core.config import get_settings
@@ -175,8 +183,15 @@ async def sync_jobs() -> None:
         scheduler_tz = str(getattr(scheduler, 'timezone', ''))
         if desired_tz and desired_tz != scheduler_tz:
             scheduler.configure(timezone=desired_tz)
+            tz_changed = True
     except Exception:
         pass
+
+    # 时区变更时，移除所有旧 job（它们用的是旧时区），后面会重新创建
+    if tz_changed:
+        for job in list(scheduler.get_jobs()):
+            if job.id.startswith(("sign-task-", "sign-", "db-", "emby-")):
+                job.remove()
 
     from backend.services.sign_tasks import get_sign_task_service
 
@@ -307,6 +322,68 @@ def shutdown_scheduler() -> None:
     if scheduler:
         scheduler.shutdown(wait=False)
         scheduler = None
+
+
+async def schedule_emby_jobs() -> None:
+    """调度所有 Emby 保号任务"""
+    global scheduler
+    if scheduler is None:
+        return
+    try:
+        import json
+        import random
+        from pathlib import Path
+        from backend.core.config import get_settings
+        from apscheduler.triggers.interval import IntervalTrigger
+
+        workdir = get_settings().resolve_workdir()
+        tasks_file = workdir / "emby_tasks.json"
+        if not tasks_file.exists():
+            return
+        tasks = json.loads(tasks_file.read_text(encoding="utf-8"))
+
+        # 移除旧 job
+        for job in scheduler.get_jobs():
+            if job.id.startswith("emby-"):
+                job.remove()
+
+        for task in tasks:
+            if not task.get("enabled", True):
+                continue
+            time_range = task.get("time_range", "08:00-22:00")
+            try:
+                start_h, end_h = time_range.split("-")
+                start_hour = int(start_h.split(":")[0])
+                end_hour = int(end_h.split(":")[0])
+            except Exception:
+                start_hour, end_hour = 8, 22
+
+            # 在时间窗口内随机选一个时间
+            rnd_hour = random.randint(start_hour, max(start_hour, end_hour - 1))
+            rnd_min = random.randint(0, 59)
+
+            scheduler.add_job(
+                _run_emby_task,
+                trigger=IntervalTrigger(hours=24, start_date=f"2026-01-01T{rnd_hour:02d}:{rnd_min:02d}:00"),
+                id=f"emby-{task['id']}",
+                kwargs={"task_id": task["id"]},
+                replace_existing=True,
+                misfire_grace_time=7200,
+            )
+    except Exception:
+        pass
+
+
+async def _run_emby_task(task_id: str) -> None:
+    """由调度器触发执行"""
+    try:
+        from backend.api.routes.emby import _execute_task, _load
+        tasks = _load()
+        task = next((t for t in tasks if t["id"] == task_id), None)
+        if task and task.get("enabled", True):
+            await _execute_task(task)
+    except Exception:
+        pass
 
 
 def add_or_update_sign_task_job(

@@ -170,6 +170,10 @@ async def on_startup() -> None:
         ensure_admin(db)
     await init_scheduler(sync_on_startup=False)
 
+    # 迁移旧扁平会话文件到按账号隔离的目录
+    from tg_signer.core import migrate_sessions_to_account_dirs
+    migrate_sessions_to_account_dirs(settings.resolve_session_dir())
+
     # Pre-export session strings from .session files to avoid SQLite locks during task execution
     _pre_export_session_strings()
 

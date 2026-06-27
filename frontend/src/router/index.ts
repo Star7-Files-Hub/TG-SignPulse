@@ -12,6 +12,8 @@ const router = createRouter({
         { path: 'dashboard', name: 'dashboard', component: () => import('../views/Dashboard.vue') },
         { path: 'accounts', name: 'accounts', component: () => import('../views/Accounts.vue') },
         { path: 'tasks', name: 'tasks', component: () => import('../views/Tasks.vue') },
+        { path: 'monitors', name: 'monitors', component: () => import('../views/Monitors.vue') },
+        { path: 'emby', name: 'emby', component: () => import('../views/Emby.vue') },
         { path: 'logs', name: 'logs', component: () => import('../views/Logs.vue') },
         { path: 'settings', name: 'settings', component: () => import('../views/Settings.vue') }
       ]

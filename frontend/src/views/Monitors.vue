@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { Plus, Trash2, Radio, Zap } from 'lucide-vue-next'
-import { listMonitors, createMonitor, updateMonitor, deleteMonitor, listAccounts } from '../lib/api'
+import { listMonitors, createMonitor, updateMonitor, deleteMonitor, toggleMonitor, listAccounts } from '../lib/api'
 import Modal from '../components/Modal.vue'
 import CustomSelect from '../components/CustomSelect.vue'
 import MultiSelect from '../components/MultiSelect.vue'
@@ -53,14 +53,14 @@ const refresh = async () => {
 // ---- 转发 ----
 const openForwardAdd = () => {
   editingMonitor.value = null
-  forwardForm.value = { id: '', name: '', account_names: [], keywords: [], match_mode: 'regex', forward_chat_id: null, dedup_seconds: 60, fuzzy_threshold: 0.85, fuzzy_cooldown_minutes: 5, smart_dedup: false, forward_with_button: false, smart_dedup_pattern: '', enabled: true }
+  forwardForm.value = { id: '', name: '', account_names: [], forward_targets: [], source_chat_id: null, keywords: [], match_mode: 'regex', forward_chat_id: null, dedup_seconds: 60, fuzzy_threshold: 0.85, fuzzy_cooldown_minutes: 5, smart_dedup: false, forward_with_button: false, smart_dedup_pattern: '', enabled: true }
   fwKeywordsText.value = ''
   formError.value = ''
   showForwardModal.value = true
 }
 const openForwardEdit = (m: any) => {
   editingMonitor.value = m
-  forwardForm.value = { ...m, dedup_seconds: m.dedup_seconds ?? 60, fuzzy_threshold: m.fuzzy_threshold ?? 0.85, fuzzy_cooldown_minutes: m.fuzzy_cooldown_minutes ?? 5, smart_dedup: m.smart_dedup ?? false, forward_with_button: m.forward_with_button ?? false, smart_dedup_pattern: m.smart_dedup_pattern || '' }
+  forwardForm.value = { ...m, dedup_seconds: m.dedup_seconds ?? 60, fuzzy_threshold: m.fuzzy_threshold ?? 0.85, fuzzy_cooldown_minutes: m.fuzzy_cooldown_minutes ?? 5, smart_dedup: m.smart_dedup ?? false, forward_with_button: m.forward_with_button ?? false, smart_dedup_pattern: m.smart_dedup_pattern || '', forward_targets: (m.forward_targets || []).map((t: any) => ({...t})) }
   fwKeywordsText.value = (m.keywords || []).join('\n')
   formError.value = ''
   showForwardModal.value = true
@@ -69,10 +69,22 @@ const saveForward = async () => {
   const token = localStorage.getItem('tg-signer-token') || ''
   formLoading.value = true; formError.value = ''
   try {
+    const fwTargets = (forwardForm.value.forward_targets || []).filter((t: any) => t.account && t.forward_chat_id)
     const data: any = {
-      ...forwardForm.value,
+      name: forwardForm.value.name,
       action: 'forward',
       keywords: fwKeywordsText.value.split('\n').map(s => s.trim()).filter(Boolean),
+      match_mode: forwardForm.value.match_mode,
+      forward_targets: fwTargets,
+      source_chat_id: forwardForm.value.source_chat_id || null,
+      forward_chat_id: fwTargets.length ? null : (forwardForm.value.forward_chat_id || null),
+      dedup_seconds: forwardForm.value.dedup_seconds,
+      fuzzy_threshold: forwardForm.value.fuzzy_threshold,
+      fuzzy_cooldown_minutes: forwardForm.value.fuzzy_cooldown_minutes,
+      smart_dedup: forwardForm.value.smart_dedup,
+      forward_with_button: forwardForm.value.forward_with_button,
+      smart_dedup_pattern: forwardForm.value.smart_dedup_pattern || null,
+      enabled: forwardForm.value.enabled,
     }
     if (editingMonitor.value) await updateMonitor(token, editingMonitor.value.id, data)
     else await createMonitor(token, data)
@@ -133,6 +145,12 @@ const handleDelete = async (m: any) => {
   if (!confirm(`删除监听器 ${m.name || m.id}？`)) return
   const token = localStorage.getItem('tg-signer-token') || ''
   await deleteMonitor(token, m.id)
+  await refresh()
+}
+
+const toggleEnabled = async (m: any) => {
+  const token = localStorage.getItem('tg-signer-token') || ''
+  await toggleMonitor(token, m.id)
   await refresh()
 }
 
@@ -352,11 +370,17 @@ const formatEventData = (data: any) => {
                 <span v-if="!m.enabled" class="text-[10px] text-gray-400 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">{{ t('monitors.disabled') }}</span>
               </div>
               <div class="text-xs text-gray-400 mt-0.5">
-                <span>@{{ (m.account_names || []).join(', ') || '-' }}</span>
-                <span v-if="m.forward_chat_id" class="ml-2">→ {{ m.forward_chat_id }}</span>
+                <template v-if="m.forward_targets?.length">
+                  <span v-for="(t, i) in m.forward_targets" :key="i" class="mr-2">@{{ t.account }} → {{ t.forward_chat_id }}</span>
+                </template>
+                <template v-else>
+                  <span>@{{ (m.account_names || []).join(', ') || '-' }}</span>
+                  <span v-if="m.forward_chat_id" class="ml-2">→ {{ m.forward_chat_id }}</span>
+                </template>
                 <span class="ml-2">{{ (m.keywords || []).slice(0, 3).join(', ') }}{{ (m.keywords || []).length > 3 ? '...' : '' }}</span>
               </div>
             </div>
+            <button @click="toggleEnabled(m)" class="p-1.5 text-xs" :class="m.enabled ? 'text-emerald-500' : 'text-gray-300'" :title="m.enabled ? '禁用' : '启用'">{{ m.enabled ? '●' : '○' }}</button>
             <button @click="openForwardEdit(m)" class="p-1.5 text-xs text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">{{ t('common.edit') }}</button>
             <button @click="handleDelete(m)" class="p-1.5 text-gray-400 hover:text-rose-500"><Trash2 class="w-3.5 h-3.5" /></button>
           </div>
@@ -394,6 +418,7 @@ const formatEventData = (data: any) => {
                 <span class="ml-2">@{{ (m.account_names || []).join(', ') || '-' }}</span>
               </div>
             </div>
+            <button @click="toggleEnabled(m)" class="p-1.5 text-xs" :class="m.enabled ? 'text-emerald-500' : 'text-gray-300'" :title="m.enabled ? '禁用' : '启用'">{{ m.enabled ? '●' : '○' }}</button>
             <button @click="openRedPacketEdit(m)" class="p-1.5 text-xs text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">{{ t('common.edit') }}</button>
             <button @click="handleDelete(m)" class="p-1.5 text-gray-400 hover:text-rose-500"><Trash2 class="w-3.5 h-3.5" /></button>
           </div>
@@ -449,9 +474,15 @@ const formatEventData = (data: any) => {
         </div>
         <div class="grid grid-cols-2 gap-4">
           <div class="space-y-1.5">
+            <label class="text-xs font-medium text-gray-500">{{ t('monitors.sourceChatId') }}</label>
+            <input v-model.number="forwardForm.source_chat_id" placeholder="留空=全部群聊频道" class="w-full h-10 px-3 text-sm border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 outline-none focus:border-sky-400" />
+          </div>
+          <div class="space-y-1.5">
             <label class="text-xs font-medium text-gray-500">{{ t('monitors.forwardChatId') }} <span class="text-rose-500">*</span></label>
             <input v-model.number="forwardForm.forward_chat_id" placeholder="-10012345678" class="w-full h-10 px-3 text-sm border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 outline-none focus:border-sky-400" />
           </div>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
           <div class="space-y-1.5">
             <label class="text-xs font-medium text-gray-500">{{ t('monitors.dedupSeconds') }}</label>
             <input v-model.number="forwardForm.dedup_seconds" type="number" min="0" placeholder="60" class="w-full h-10 px-3 text-sm border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 outline-none focus:border-sky-400" />

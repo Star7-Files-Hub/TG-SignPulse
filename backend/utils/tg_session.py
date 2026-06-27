@@ -261,7 +261,9 @@ def set_account_status(
 
 
 def session_string_file_path(session_dir: Path, account_name: str) -> Path:
-    return session_dir / f"{account_name}.session_string"
+    # 按账号隔离：sessions/{account_name}/{account_name}.session_string
+    account_dir = session_dir / account_name
+    return account_dir / f"{account_name}.session_string"
 
 
 def load_session_string_file(session_dir: Path, account_name: str) -> Optional[str]:

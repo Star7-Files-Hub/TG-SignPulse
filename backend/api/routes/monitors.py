@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 
 from backend.core.auth import get_current_user
 from backend.core.config import get_settings
@@ -38,14 +38,22 @@ def _save_monitors(data: list[dict]) -> None:
 
 # ---- Schemas ----
 
+class ForwardTarget(BaseModel):
+    account: str = Field(...)
+    forward_chat_id: int = Field(...)
+
+
 class MonitorIn(BaseModel):
     name: str = Field(..., description="监听器名称")
-    account_names: List[str] = Field(..., description="关联账号（必选）")
+    account_names: List[str] = Field(default_factory=list, description="关联账号")
     action: str = Field("forward", description="forward / red_packet_button / red_packet_keyword")
+    # 多目标转发：共享关键词，不同账号 → 不同频道
+    forward_targets: List[ForwardTarget] = Field(default_factory=list)
+    source_chat_id: Optional[int] = Field(None, description="限定来源 Chat ID（空=全部群聊频道）")
     # 转发模式
     keywords: List[str] = Field(default_factory=list, description="关键词（正则）列表")
     match_mode: str = Field("regex", description="contains / exact / regex")
-    forward_chat_id: Optional[int] = Field(None, description="转发目标 Chat ID")
+    forward_chat_id: Optional[int] = Field(None, description="转发目标 Chat ID（单目标兼容）")
     forward_thread_id: Optional[int] = Field(None, description="转发目标话题 ID")
     dedup_seconds: int = Field(60, description="消息ID去重窗口秒数")
     fuzzy_threshold: float = Field(0.85, description="模糊匹配阈值（0-1，0=关闭模糊去重）")
@@ -63,13 +71,6 @@ class MonitorIn(BaseModel):
     auto_reply_delay: float = Field(0, description="回复延迟秒数")
     enabled: bool = Field(True)
 
-    @validator("account_names")
-    @classmethod
-    def account_names_not_empty(cls, v):
-        if not v:
-            raise ValueError("至少选择一个关联账号")
-        return v
-
 
 class MonitorOut(MonitorIn):
     id: str
@@ -78,6 +79,8 @@ class MonitorOut(MonitorIn):
 class MonitorUpdate(BaseModel):
     name: Optional[str] = None
     account_names: Optional[List[str]] = None
+    forward_targets: Optional[List[ForwardTarget]] = None
+    source_chat_id: Optional[int] = None
     action: Optional[str] = None
     keywords: Optional[List[str]] = None
     match_mode: Optional[str] = None
@@ -160,6 +163,20 @@ async def delete_monitor(
     from backend.services.keyword_monitor import get_keyword_monitor_service
     asyncio.ensure_future(get_keyword_monitor_service().restart_from_tasks())
     return {"ok": True}
+
+
+@router.put("/{monitor_id}/toggle")
+async def toggle_monitor(monitor_id: str, current_user: User = Depends(get_current_user)):
+    monitors = _load_monitors()
+    for m in monitors:
+        if m.get("id") == monitor_id:
+            m["enabled"] = not m.get("enabled", True)
+            _save_monitors(monitors)
+            import asyncio
+            from backend.services.keyword_monitor import get_keyword_monitor_service
+            asyncio.ensure_future(get_keyword_monitor_service().restart_from_tasks())
+            return {"ok": True, "enabled": m["enabled"]}
+    raise HTTPException(status_code=404, detail="监听器不存在")
 
 
 class MonitorLogEntry(BaseModel):

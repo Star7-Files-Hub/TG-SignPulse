@@ -547,7 +547,6 @@ class SignTaskService:
         def _append(value: Optional[str]) -> None:
             if not isinstance(value, str):
                 return
-            # Preserve wildcard marker
             if value.strip() == "*":
                 if "*" not in ordered:
                     ordered.append("*")
@@ -559,7 +558,9 @@ class SignTaskService:
         if account_names:
             for item in account_names:
                 _append(item)
-        _append(account_name)
+        if account_name and not account_names:
+            # 仅在 account_names 为空时才追加 account_name（兼容旧版单字段）
+            _append(account_name)
         return ordered
 
     def _expand_account_names(self, account_names: List[str]) -> List[str]:
@@ -670,14 +671,15 @@ class SignTaskService:
         task_group_id: str = "",
         last_run_account_name: str = "",
         retry_count: int = 3,
+        per_account_enabled: Optional[Dict[str, bool]] = None,
     ) -> Dict[str, Any]:
+        if per_account_enabled is None:
+            per_account_enabled = {}
         normalized_accounts = self._normalize_account_names(
             account_names, primary_account_name
         )
         return {
             "name": task_name,
-            # Keep the owning account on raw task records. Aggregated task views
-            # intentionally collapse to the first linked account elsewhere.
             "account_name": primary_account_name,
             "account_names": normalized_accounts,
             "sign_at": sign_at,
@@ -693,6 +695,7 @@ class SignTaskService:
             "task_group_id": task_group_id,
             "last_run_account_name": last_run_account_name,
             "retry_count": retry_count,
+            "per_account_enabled": per_account_enabled,
         }
 
     def _aggregate_tasks(self, tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -713,7 +716,12 @@ class SignTaskService:
                     "account_names": self._normalize_account_names(
                         task.get("account_names"), task.get("account_name")
                     ),
+                    "per_account_last_run": {},
                 }
+                # Collect per-account last_run for this first task
+                _acc = task.get("account_name") or ""
+                if _acc and _acc != "*":
+                    merged["per_account_last_run"][_acc] = task.get("last_run")
                 # Ensure account_name is a real one, not "*"
                 if not merged.get("account_name") or merged.get("account_name") == "*":
                     merged["account_name"] = _first_real_account(
@@ -741,6 +749,21 @@ class SignTaskService:
             )
             existing["last_run"] = latest_last_run
             existing["last_run_account_name"] = latest_last_run_account_name
+            # Merge per_account_enabled: explicit False wins
+            merged_pae = dict(existing.get("per_account_enabled", {}))
+            for k, v in (task.get("per_account_enabled") or {}).items():
+                if k not in merged_pae or v is False:
+                    merged_pae[k] = v
+            existing["per_account_enabled"] = merged_pae
+            # Collect per-account last_run
+            per_acc = existing.setdefault("per_account_last_run", {})
+            _acc = task.get("account_name") or ""
+            if _acc and _acc != "*":
+                acc_last = task.get("last_run")
+                if acc_last:
+                    existing["per_account_last_run"][_acc] = acc_last
+                else:
+                    existing["per_account_last_run"].setdefault(_acc, None)
 
         return sorted(
             grouped.values(),
@@ -1713,6 +1736,20 @@ class SignTaskService:
         no_updates: bool,
         notify_on_failure: bool = True,
     ) -> Optional[str]:
+        # ── 如果关键词监控已证明此账号在线，跳过验证 ──
+        try:
+            from backend.services.keyword_monitor import get_keyword_monitor_service
+            ksvc = get_keyword_monitor_service()
+            for a_name, a_client, _ in ksvc._handler_refs:
+                if a_name == account_name and getattr(a_client, "is_connected", False):
+                    msg_count = ksvc._msg_received.get(account_name, 0)
+                    last_time = ksvc._last_msg_time.get(account_name, 0)
+                    if msg_count > 0 and (__import__("time").time() - last_time < 600):
+                        # 10分钟内有收到消息 → 账号确定在线，跳过验证
+                        return None
+        except Exception:
+            pass
+
         stored_status = get_account_status(account_name)
         if (
             stored_status.get("status") == "invalid"
@@ -2284,6 +2321,7 @@ class SignTaskService:
                     (last_run or {}).get("account_name") or resolved_account_name
                 ),
                 retry_count=int(config.get("retry_count", 3)),
+                per_account_enabled=config.get("per_account_enabled", {}),
             )
         except Exception:
             return None
@@ -2370,6 +2408,7 @@ class SignTaskService:
                 "range_end": range_end,
                 "notify_on_failure": notify_on_failure,
                 "retry_count": retry_count if retry_count is not None else 3,
+                "per_account_enabled": {acc: True for acc in stored_account_names if acc != "*"},
             }
 
             with open(task_dir / "config.json", "w", encoding="utf-8") as f:
@@ -2396,15 +2435,17 @@ class SignTaskService:
         except Exception as e:
             _service_logger.debug(f"更新调度任务失败: {e}")
 
-        related = self._find_related_task_infos(task_name, target_accounts[0])
-        if len(target_accounts) > 1:
+        related = self._find_related_task_infos(task_name)
+        if len(target_accounts) > 1 and related:
             grouped = self._aggregate_tasks(related)
             if grouped:
                 return grouped[0]
-        task = self.get_task(task_name, account_name=target_accounts[0])
-        if task is None:
-            raise ValueError(f"任务 {task_name} 创建后无法读取")
-        return task
+        # Try each target account to read back the created task
+        for acc in target_accounts:
+            task = self.get_task(task_name, account_name=acc)
+            if task is not None:
+                return task
+        raise ValueError(f"任务 {task_name} 创建后无法读取（已尝试账号: {target_accounts}）")
 
     def update_task(
         self,
@@ -3379,20 +3420,39 @@ class SignTaskService:
                             raise ValueError(f"账号 {account_name} 的 session_string 不存在")
                         use_in_memory = True
                     else:
-                        # File mode: prefer in-memory to avoid SQLite "database is locked"
-                        # Try to load session_string from .session_string file as fallback
-                        session_string = load_session_string_file(
-                            session_dir, account_name
-                        )
-                        if session_string:
-                            use_in_memory = True
-                        else:
-                            use_in_memory = False
-
-                        if os.getenv("SIGN_TASK_FORCE_IN_MEMORY") == "0":
-                            # Explicitly disabled in-memory mode
-                            session_string = None
-                            use_in_memory = False
+                        # 始终使用 in-memory session_string，不与关键词监控共享连接
+                        # 优先从关键词监控的 LIVE 客户端导出最新 key
+                        session_string = None
+                        try:
+                            from backend.services.keyword_monitor import get_keyword_monitor_service
+                            ksvc = get_keyword_monitor_service()
+                            for _acc, _client, _ref in ksvc._handler_refs:
+                                if _acc == account_name and getattr(_client, "is_connected", False):
+                                    session_string = await _client.export_session_string()
+                                    if session_string:
+                                        from backend.utils.tg_session import set_account_session_string, save_session_string_file
+                                        set_account_session_string(account_name, session_string)
+                                        save_session_string_file(session_dir, account_name, session_string)
+                                    break
+                        except Exception:
+                            pass
+                        # 降级：从文件加载
+                        if not session_string:
+                            session_string = load_session_string_file(session_dir, account_name)
+                        # 再降级：从 .session 文件导出
+                        if not session_string:
+                            try:
+                                from tg_signer.core import get_client as _gc
+                                _tmp = _gc(account_name, proxy=proxy_dict, workdir=session_dir, no_updates=True)
+                                async with _tmp:
+                                    session_string = await _tmp.export_session_string()
+                                if session_string:
+                                    from backend.utils.tg_session import set_account_session_string, save_session_string_file
+                                    set_account_session_string(account_name, session_string)
+                                    save_session_string_file(session_dir, account_name, session_string)
+                            except Exception:
+                                pass
+                        use_in_memory = bool(session_string)
 
                     self._active_logs[task_key].append(
                         f"消息更新监听: {'开启' if requires_updates else '关闭'}"
@@ -3403,7 +3463,6 @@ class SignTaskService:
                         )
 
                     # 实例化 UserSigner (使用 BackendUserSigner)
-                    # 注意: UserSigner 内部会使用 get_client 复用 client
                     signer = BackendUserSigner(
                         task_name=task_name,
                         session_dir=str(session_dir),

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { LayoutDashboard, Users, Zap, Terminal, Settings, UserCircle, Github, Globe, Moon, Sun, Menu } from 'lucide-vue-next'
+import { LayoutDashboard, Users, Zap, Radio, Tv, Terminal, Settings, UserCircle, Github, Globe, Moon, Sun, Menu } from 'lucide-vue-next'
 import { useTheme } from '../composables/useTheme'
 import { useI18n } from '../composables/useI18n'
 import UserProfileModal from '../components/settings/UserProfileModal.vue'
@@ -16,6 +16,8 @@ const navigation = [
   { id: 'dashboard', name: 'dashboard', icon: LayoutDashboard, labelKey: 'nav.dashboard' },
   { id: 'accounts', name: 'accounts', icon: Users, labelKey: 'nav.accounts' },
   { id: 'tasks', name: 'tasks', icon: Zap, labelKey: 'nav.tasks' },
+  { id: 'monitors', name: 'monitors', icon: Radio, labelKey: 'nav.monitors' },
+  { id: 'emby', name: 'emby', icon: Tv, labelKey: 'nav.emby' },
   { id: 'logs', name: 'logs', icon: Terminal, labelKey: 'nav.logs' },
   { id: 'settings', name: 'settings', icon: Settings, labelKey: 'nav.settings' },
 ]

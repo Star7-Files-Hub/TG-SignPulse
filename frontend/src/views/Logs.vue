@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { getTaskHistoryLogs, getTaskHistoryLogDetail, getLoginAuditLogs, listAccounts } from '../lib/api'
+import { getTaskHistoryLogs, getTaskHistoryLogDetail, getLoginAuditLogs, listAccounts, getEmbyLogs, getAllLogs } from '../lib/api'
 import { useI18n } from '../composables/useI18n'
 import Modal from '../components/Modal.vue'
 import CustomSelect from '../components/CustomSelect.vue'
@@ -18,7 +18,13 @@ const translateLoginDetail = (detail: string | null | undefined, success: boolea
   return detail
 }
 
-const activeTab = ref<'tasks' | 'login'>('tasks')
+const activeTab = ref<'tasks' | 'login' | 'emby' | 'all'>('tasks')
+const embyLogs = ref<any[]>([])
+const allLogs = ref<any[]>([])
+const allLogTotal = ref(0)
+const allLogLevelFilter = ref('')
+const allLogModuleFilter = ref('')
+const allLogSearch = ref('')
 
 const filterTask = ref('')
 const filterAccount = ref('')
@@ -42,6 +48,30 @@ const statusOptions = computed(() => [
   { label: t('logs.success'), value: 'success' },
   { label: t('logs.failed'), value: 'error' }
 ])
+
+const loadAllLogs = async () => {
+  const token = localStorage.getItem('tg-signer-token') || ''
+  try {
+    const res = await getAllLogs(token, {
+      level: allLogLevelFilter.value || undefined,
+      module: allLogModuleFilter.value || undefined,
+      search: allLogSearch.value || undefined,
+      limit: 200,
+    })
+    allLogs.value = res.logs
+    allLogTotal.value = res.total
+  } catch (e) { console.error(e) }
+}
+
+const getLevelColor = (level: string) => {
+  switch (level?.toUpperCase()) {
+    case 'ERROR': case 'CRITICAL': return 'text-rose-600 bg-rose-50 dark:bg-rose-900/30'
+    case 'WARNING': return 'text-amber-600 bg-amber-50 dark:bg-amber-900/30'
+    case 'INFO': return 'text-blue-600 bg-blue-50 dark:bg-blue-900/30'
+    case 'DEBUG': return 'text-gray-400 bg-gray-50 dark:bg-gray-800'
+    default: return 'text-gray-500 bg-gray-50 dark:bg-gray-800'
+  }
+}
 
 const loadAccounts = async () => {
   const token = localStorage.getItem('tg-signer-token') || ''
@@ -121,11 +151,23 @@ const loadLoginLogs = async () => {
   }
 }
 
+const loadEmbyLogs = async () => {
+  const token = localStorage.getItem('tg-signer-token') || ''
+  try {
+    const res = await getEmbyLogs(token, 200)
+    embyLogs.value = res
+  } catch { }
+}
+
 const loadLogs = async () => {
   pageLoading.value = true
   try {
     if (activeTab.value === 'tasks') {
       await loadTaskLogs()
+    } else if (activeTab.value === 'emby') {
+      await loadEmbyLogs()
+    } else if (activeTab.value === 'all') {
+      await loadAllLogs()
     } else {
       await loadLoginLogs()
     }
@@ -193,6 +235,20 @@ onMounted(() => {
       >
         {{ t('logs.auditLogs') }}
       </button>
+      <button 
+        @click="activeTab = 'emby'"
+        class="pb-2 text-sm font-medium transition-colors border-b-2"
+        :class="activeTab === 'emby' ? 'border-gray-900 dark:border-gray-100 text-gray-900 dark:text-gray-100' : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'"
+      >
+        🎬 {{ t('logs.embyLogs') }}
+      </button>
+      <button 
+        @click="activeTab = 'all'"
+        class="pb-2 text-sm font-medium transition-colors border-b-2"
+        :class="activeTab === 'all' ? 'border-gray-900 dark:border-gray-100 text-gray-900 dark:text-gray-100' : 'border-transparent text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'"
+      >
+        📋 全量日志
+      </button>
     </div>
 
     <!-- Filters -->
@@ -240,6 +296,49 @@ onMounted(() => {
             >
               {{ log.text }}
             </span>
+          </div>
+        </div>
+      </div>
+
+      <div v-else-if="activeTab === 'emby'" class="font-mono text-xs">
+        <div v-if="embyLogs.length === 0" class="flex flex-col items-center justify-center py-16 text-center font-sans">
+          <p class="text-sm text-gray-500">{{ t('logs.emptyEmby') }}</p>
+        </div>
+        <div v-else class="overflow-x-auto">
+          <div v-for="(l, i) in embyLogs" :key="i" class="flex items-center gap-3 hover:bg-gray-50 dark:hover:bg-gray-800/30 px-2 py-1.5 transition-colors whitespace-nowrap min-w-max">
+            <span class="text-gray-500 shrink-0 w-[140px]">{{ l.time }}</span>
+            <span class="text-gray-700 dark:text-gray-400 shrink-0 w-24 truncate">{{ l.task_name }}</span>
+            <span class="text-gray-500 shrink-0 w-20 truncate">{{ l.account }}</span>
+            <span class="text-gray-500 shrink-0 w-32 truncate">{{ l.item || l.error || '-' }}</span>
+            <span :class="l.success ? 'text-emerald-500' : 'text-rose-500'" class="shrink-0">{{ l.success ? '✅' : '❌' }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div v-else-if="activeTab === 'all'" class="space-y-3">
+        <!-- Filters -->
+        <div class="flex items-center gap-2 flex-wrap">
+          <select v-model="allLogLevelFilter" @change="loadAllLogs()" class="h-8 px-2 text-xs border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 rounded">
+            <option value="">全部级别</option>
+            <option value="ERROR">ERROR</option>
+            <option value="WARNING">WARNING</option>
+            <option value="INFO">INFO</option>
+          </select>
+          <input v-model="allLogModuleFilter" @keyup.enter="loadAllLogs()" placeholder="模块筛选..." class="h-8 px-2 text-xs border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 rounded w-40" />
+          <input v-model="allLogSearch" @keyup.enter="loadAllLogs()" placeholder="关键词搜索..." class="h-8 px-2 text-xs border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 rounded w-48" />
+          <button @click="loadAllLogs()" class="h-8 px-3 text-xs bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 rounded hover:opacity-80">搜索</button>
+          <span class="text-[10px] text-gray-400 ml-auto">共 {{ allLogTotal }} 条</span>
+        </div>
+        <!-- Logs -->
+        <div v-if="allLogs.length === 0" class="flex flex-col items-center justify-center py-16 text-center">
+          <p class="text-sm text-gray-500">暂无日志</p>
+        </div>
+        <div v-else class="font-mono text-[11px] space-y-0.5 max-h-[60vh] overflow-y-auto">
+          <div v-for="(l, i) in allLogs" :key="i" class="flex items-start gap-2 hover:bg-gray-50 dark:hover:bg-gray-800/30 px-2 py-1 transition-colors">
+            <span class="text-gray-400 shrink-0 w-[140px] text-right text-[10px]">{{ l.time || '-' }}</span>
+            <span class="shrink-0 w-16 text-center rounded px-1 text-[10px] font-semibold" :class="getLevelColor(l.level)">{{ l.level }}</span>
+            <span v-if="l.module" class="text-gray-500 shrink-0 w-36 truncate text-[10px]">{{ l.module }}</span>
+            <span class="truncate" :class="l.level === 'ERROR' ? 'text-rose-600' : l.level === 'WARNING' ? 'text-amber-600' : 'text-gray-700 dark:text-gray-300'">{{ l.message }}</span>
           </div>
         </div>
       </div>

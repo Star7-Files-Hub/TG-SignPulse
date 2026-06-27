@@ -243,3 +243,87 @@ def delete_task_log(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="TASK_LOG_NOT_FOUND")
 
     return DeleteLogResponse(success=True, message="Task log deleted")
+
+
+# ── 全量日志 API ──
+
+import re
+from pathlib import Path
+
+from backend.core.config import get_settings
+
+
+class AllLogItem(BaseModel):
+    time: str = ""
+    level: str = "INFO"
+    module: str = ""
+    message: str = ""
+
+
+@router.get("/all", response_model=dict)
+def get_all_logs(
+    level: Optional[str] = None,
+    module: Optional[str] = None,
+    search: Optional[str] = None,
+    limit: int = 200,
+    current_user: User = Depends(get_current_user),
+):
+    """返回所有模块的日志，支持按级别/模块/关键词筛选"""
+    del current_user
+    settings = get_settings()
+    logs_dir = settings.resolve_logs_dir()
+    lines: list[dict] = []
+
+    # 解析一行日志：格式为 "LEVEL:message" 或 "timestamp LEVEL: ..."
+    _log_pattern = re.compile(
+        r'^(?P<time>\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}[\.,]\d+)?\s*'
+        r'(?P<level>DEBUG|INFO|WARNING|ERROR|CRITICAL)?[\s:]*'
+        r'(?P<module>\[[\w\.]+\])?\s*'
+        r'(?P<message>.+)$'
+    )
+
+    def _parse_line(line: str) -> dict:
+        line = line.strip()
+        if not line:
+            return {}
+        m = _log_pattern.match(line)
+        if not m:
+            return {"time": "", "level": "INFO", "module": "", "message": line}
+        lvl = (m.group("level") or "INFO").upper()
+        mod = (m.group("module") or "").strip("[]")
+        msg = (m.group("message") or line).strip()
+        t = (m.group("time") or "").strip()
+        return {"time": t, "level": lvl, "module": mod, "message": msg}
+
+    for log_name in ["app.log", "error.log"]:
+        f = logs_dir / log_name
+        if not f.exists():
+            continue
+        try:
+            content = f.read_text(encoding="utf-8", errors="replace")
+            for line in content.split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                parsed = _parse_line(line)
+                if not parsed:
+                    continue
+                # 筛选
+                if level and parsed["level"] != level.upper():
+                    continue
+                if module and module.lower() not in parsed["module"].lower():
+                    continue
+                if search and search.lower() not in parsed["message"].lower():
+                    continue
+                lines.append(parsed)
+        except Exception:
+            continue
+
+    # 按时间倒序（有时间的排前面），截取 limit
+    lines.sort(key=lambda x: str(x.get("time") or ""), reverse=True)
+    lines = lines[-limit:] if len(lines) > limit else lines
+
+    return {
+        "total": len(lines),
+        "logs": [AllLogItem(**item) for item in lines[-limit:]],
+    }

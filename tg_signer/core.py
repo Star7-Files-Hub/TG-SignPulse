@@ -531,10 +531,12 @@ def get_client(
         api_id = api_id or _api_id
         api_hash = api_hash or _api_hash
 
-    # Use separate cache keys for in-memory vs file-mode clients to prevent
-    # database lock conflicts when keyword monitor (file mode) and manual
-    # task execution (in-memory mode) run on the same account
-    base_key = str(pathlib.Path(workdir).joinpath(name).resolve())
+    # ── 按账号隔离会话目录：sessions/{name}/{name}.session ──
+    root = pathlib.Path(workdir)
+    account_dir = root / name
+    account_dir.mkdir(parents=True, exist_ok=True)
+
+    base_key = str((account_dir / name).resolve())
     key = f"{base_key}::memory" if (in_memory and session_string) else base_key
 
     if key in _CLIENT_INSTANCES:
@@ -557,7 +559,7 @@ def get_client(
         api_id=api_id,
         api_hash=api_hash,
         proxy=proxy,
-        workdir=workdir,
+        workdir=str(account_dir),
         session_string=session_string,
         in_memory=in_memory,
         key=key,
@@ -570,46 +572,78 @@ def get_client(
 async def close_client_by_name(name: str, workdir: Union[str, pathlib.Path] = "."):
     """
     Forcefully close a client instance by its name and release resources.
+    Handles both old flat-path and new per-account subdirectory keys.
     """
-    key = str(pathlib.Path(workdir).joinpath(name).resolve())
+    # New: per-account subdirectory
+    root = pathlib.Path(workdir)
+    account_dir = root / name
+    new_key = str((account_dir / name).resolve())
+    # Old: flat path (for migration compatibility)
+    old_key = str(root.joinpath(name).resolve())
 
-    # Check if we have a lock for this client
-    lock = _CLIENT_ASYNC_LOCKS.get(key)
-    if lock:
-        # Acquire the lock to ensure we have exclusive access
-        # Note: This might block if a task is running.
-        # If we want to forceful kill, we might skip this, but that's dangerous.
-        # For deletion, waiting a moment is acceptable.
-        try:
-            # Try to acquire with timeout to avoid deadlocks if something is stuck
-            await asyncio.wait_for(lock.acquire(), timeout=5.0)
+    for key in (new_key, old_key, f"{new_key}::memory", f"{old_key}::memory"):
+        lock = _CLIENT_ASYNC_LOCKS.get(key)
+        if lock:
             try:
-                # Reset references to 0 to ensure proper cleanup
+                await asyncio.wait_for(lock.acquire(), timeout=5.0)
+                try:
+                    _CLIENT_REFS[key] = 0
+                finally:
+                    lock.release()
+            except asyncio.TimeoutError:
                 _CLIENT_REFS[key] = 0
+
+        client = _CLIENT_INSTANCES.get(key)
+        if client:
+            try:
+                if client.is_connected:
+                    await client.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping client {name} (key={key}): {e}")
             finally:
-                # Even if we manipulated refs, release the lock we just acquired
-                lock.release()
-        except asyncio.TimeoutError:
-            logger.warning(
-                f"Timeout waiting for lock on client {name}, proceeding with forceful cleanup"
-            )
-            _CLIENT_REFS[key] = 0
+                _CLIENT_INSTANCES.pop(key, None)
 
-    client = _CLIENT_INSTANCES.get(key)
-    if client:
-        try:
-            if client.is_connected:
-                await client.stop()
-        except Exception as e:
-            logger.warning(f"Error stopping client {name}: {e}")
-        finally:
-            _CLIENT_INSTANCES.pop(key, None)
-
-    # Clean up locks
-    if key in _CLIENT_ASYNC_LOCKS:
         _CLIENT_ASYNC_LOCKS.pop(key, None)
-    if key in _CLIENT_REFS:
         _CLIENT_REFS.pop(key, None)
+
+
+def migrate_sessions_to_account_dirs(sessions_dir: Union[str, pathlib.Path]) -> None:
+    """将旧的扁平会话文件迁移到按账号隔离的子目录"""
+    root = pathlib.Path(sessions_dir)
+    if not root.exists():
+        return
+    moved = 0
+    for f in list(root.iterdir()):
+        if not f.is_file():
+            continue
+        # Match: {account_name}.session, {account_name}.session-*, {account_name}.session_string
+        stem = f.name
+        account_name = None
+        for suffix in (".session", ".session-string", ".session_string"):
+            if stem.endswith(suffix):
+                account_name = stem[: -len(suffix)]
+                break
+        if not account_name:
+            continue
+        if not account_name.strip():
+            continue
+        # Don't migrate files that are already in subdirectories
+        if account_name in [d.name for d in root.iterdir() if d.is_dir()]:
+            continue
+        # Create target directory and move
+        target_dir = root / account_name
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_file = target_dir / f.name
+        if target_file.exists():
+            continue  # already migrated
+        try:
+            import shutil
+            shutil.move(str(f), str(target_file))
+            moved += 1
+        except Exception:
+            pass
+    if moved:
+        logger.info("Migrated %s session files into per-account directories", moved)
 
 
 def get_now():

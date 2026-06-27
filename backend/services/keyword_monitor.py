@@ -745,16 +745,37 @@ class KeywordMonitorService:
                     # 转发模式：chat_id=0 表示监听全部群聊/频道
                     if action_type == "forward":
                         action_dict["push_channel"] = "forward"
-                        if m.get("forward_chat_id"):
-                            action_dict["forward_chat_id"] = str(m["forward_chat_id"])
                         if m.get("forward_thread_id"):
                             action_dict["forward_message_thread_id"] = m["forward_thread_id"]
+                        src_chat = m.get("source_chat_id") or 0
+                        chat_label = str(src_chat) if src_chat else "*"
+                        # 多目标转发（共享关键词，不同账号→不同频道）
+                        targets = m.get("forward_targets")
+                        if targets and isinstance(targets, list):
+                            for tgt in targets:
+                                acc = tgt.get("account", "")
+                                fid = tgt.get("forward_chat_id")
+                                if acc and fid:
+                                    act_copy = dict(action_dict)
+                                    act_copy["forward_chat_id"] = str(fid)
+                                    rules.append(KeywordMonitorRule(
+                                        account_name=acc,
+                                        task_name=f"monitor:{m.get('id', 'unknown')}",
+                                        chat_id=src_chat,
+                                        chat_name=chat_label,
+                                        message_thread_id=None,
+                                        action=act_copy,
+                                    ))
+                            continue
+                        # 单目标兼容
+                        if m.get("forward_chat_id"):
+                            action_dict["forward_chat_id"] = str(m["forward_chat_id"])
                         for acc_name in m.get("account_names", []):
                             rules.append(KeywordMonitorRule(
                                 account_name=acc_name,
                                 task_name=f"monitor:{m.get('id', 'unknown')}",
-                                chat_id=0,
-                                chat_name="*",
+                                chat_id=src_chat,
+                                chat_name=chat_label,
                                 message_thread_id=None,
                                 action=action_dict,
                             ))
@@ -833,7 +854,24 @@ class KeywordMonitorService:
             action.get("keywords"),
             split_commas=_keyword_split_commas(action),
         )
-        if not keywords or not text:
+        if not text:
+            return None
+        # 红包模式且未配置关键词
+        if not keywords and action.get("red_packet_mode"):
+            rp_mode = action["red_packet_mode"]
+            # button 模式：扫描所有消息找红包按钮
+            if rp_mode == "button":
+                return "*"
+            # keyword 模式：用 extract_pattern 过滤
+            if rp_mode == "keyword":
+                pattern = action.get("extract_pattern", r"/grab\s+(\d+)")
+                try:
+                    if re.search(pattern, text):
+                        return text[:40]
+                except re.error:
+                    pass
+            return None
+        if not keywords:
             return None
 
         mode = (action.get("match_mode") or "contains").strip()
@@ -875,12 +913,18 @@ class KeywordMonitorService:
     ) -> Dict[str, str]:
         # 提取动态数字（红包等场景）
         number = ""
+        number2 = ""
+        number3 = ""
         extract_pattern = rule.action.get("extract_pattern") if isinstance(rule.action, dict) else None
         if extract_pattern:
             try:
                 m = re.search(str(extract_pattern), text)
-                if m:
-                    number = m.group(1) if m.lastindex else m.group()
+                if m and m.lastindex:
+                    number = m.group(1) or ""
+                    if m.lastindex >= 2:
+                        number2 = m.group(2) or ""
+                    if m.lastindex >= 3:
+                        number3 = m.group(3) or ""
             except re.error:
                 pass
 
@@ -903,6 +947,8 @@ class KeywordMonitorService:
             "task_name": rule.task_name,
             "account_name": account_name,
             "number": number,
+            "number2": number2,
+            "number3": number3,
             "random_reply": random_reply,
         }
 
@@ -1674,11 +1720,11 @@ class KeywordMonitorService:
 
     async def _click_red_packet_button(
         self, *, client: Any, rule: KeywordMonitorRule, message: Message
-    ) -> None:
+    ) -> bool:
         """自动点击消息中的红包按钮（支持指定按钮名/任意按钮）"""
         reply_markup = getattr(message, "reply_markup", None)
         if not reply_markup:
-            return
+            return False
 
         button_names = rule.action.get("button_names") if isinstance(rule.action, dict) else None
         # 空列表 = 点击任意按钮（抢所有红包）
@@ -1698,7 +1744,7 @@ class KeywordMonitorService:
                         if click_any or any(name.strip().lower() in btn_text.lower() for name in button_names if name.strip()):
                             self._append_rule_log(rule, f"红包模式：点击按钮 [{btn_text}]")
                             await self._click_inline_button(client, message, btn)
-                            return
+                            return True
             elif isinstance(reply_markup, ReplyKeyboardMarkup):
                 for row in reply_markup.keyboard:
                     for btn in row:
@@ -1712,9 +1758,10 @@ class KeywordMonitorService:
                                 text=btn_text,
                                 message_thread_id=getattr(message, "message_thread_id", None),
                             )
-                            return
+                            return True
         except Exception as exc:
             self._append_rule_log(rule, f"红包按钮点击失败: {exc}")
+        return False
 
     async def _send_red_packet_reply(
         self, *, client: Any, rule: KeywordMonitorRule, message: Message,
@@ -1950,40 +1997,48 @@ class KeywordMonitorService:
                         if forward_thread_id is not None:
                             forward_kwargs["message_thread_id"] = forward_thread_id
 
-                        # ── 同步主转发：copy_message 完整保留原消息 ──
-                        # 包括文本、格式、图片/视频/文件等所有附件、以及内联按钮/回复键盘
+                        # ── forward_messages 原生转发（带「已转发」标识）──
+                        fwd_result = await self._call_client_with_retry(
+                            client,
+                            lambda _fid=forward_chat_id, _kw=dict(forward_kwargs):
+                                client.forward_messages(_fid, message.chat.id, message.id, **_kw),
+                            operation=f"keyword monitor forward {forward_chat_id}",
+                        )
+
+                        # 链接优先级：原始来源 > 当前消息
+                        # 如果大号的消息本身就是转发的（forward_from_chat），则链回真正的原始消息
+                        raw_chat_id = str(getattr(message.chat, 'id', ''))
+                        # 链接优先级：forward_from_chat > forward_origin > 当前消息
+                        # 处理多级转发链条（大号从群组转至频道，小号再从频道转出）
+                        fwd_from_chat = getattr(message, 'forward_from_chat', None)
+                        fwd_from_msg_id = getattr(message, 'forward_from_message_id', None)
+                        if not fwd_from_chat:
+                            fwd_origin = getattr(message, 'forward_origin', None)
+                            if fwd_origin:
+                                fwd_from_chat = getattr(fwd_origin, 'chat', None)
+                                fwd_from_msg_id = getattr(fwd_origin, 'message_id', 0) or getattr(message, 'forward_from_message_id', None)
+                        if fwd_from_chat and fwd_from_msg_id:
+                            src_chat_id = str(getattr(fwd_from_chat, 'id', ''))
+                            clean_src = src_chat_id[4:] if src_chat_id.startswith("-100") else src_chat_id.lstrip("-")
+                            msg_link = f"https://t.me/c/{clean_src}/{fwd_from_msg_id}"
+                        else:
+                            fwd_msg_id_val = getattr(message, 'forward_from_message_id', None) or 0
+                            if fwd_msg_id_val:
+                                clean_chat = raw_chat_id[4:] if raw_chat_id.startswith("-100") else raw_chat_id.lstrip("-")
+                                msg_link = f"https://t.me/c/{clean_chat}/{fwd_msg_id_val}"
+                            else:
+                                clean_chat = raw_chat_id[4:] if raw_chat_id.startswith("-100") else raw_chat_id.lstrip("-")
+                                msg_link = f"https://t.me/c/{clean_chat}/{message.id}"
                         await self._call_client_with_retry(
                             client,
-                            lambda: client.copy_message(
-                                forward_chat_id,
-                                message.chat.id,
-                                message.id,
-                                **forward_kwargs,
-                            ),
-                            operation=f"keyword monitor copy_message {forward_chat_id}",
+                            lambda _fid=forward_chat_id, _link=msg_link, _kw=dict(forward_kwargs):
+                                client.send_message(_fid, f"🔗 {_link}", **_kw),
+                            operation=f"keyword monitor link {forward_chat_id}",
                         )
                         self._append_rule_log(
                             rule,
-                            f"关键词命中消息已复制转发（完整保留原消息）：目标 Chat={forward_chat_id}"
+                            f"✅ 转发成功 → {chat_title}({raw_chat_id}) → {forward_chat_id}"
                             + (f"，话题ID={forward_thread_id}" if forward_thread_id is not None else ""),
-                        )
-
-                        # ── 附加元数据消息 ──
-                        meta_lines = [f"📋 Task: {rule.task_name.replace('monitor:', '')}"]
-                        meta_lines.append(f"💬 Chat: {chat_title}")
-                        meta_lines.append(f"🔑 Keyword: {matched}")
-                        if sender:
-                            meta_lines.append(f"👤 Sender: {sender}")
-                        if url:
-                            meta_lines.append(f"🔗 {url}")
-                        await self._call_client_with_retry(
-                            client,
-                            lambda _forward_chat_id=forward_chat_id,
-                            _meta=("\n".join(meta_lines))[:4096],
-                            _fw_kw=dict(forward_kwargs): client.send_message(
-                                _forward_chat_id, _meta, **_fw_kw,
-                            ),
-                            operation=f"keyword monitor metadata follow-up {forward_chat_id}",
                         )
 
                         # ── Bot 通知 ──
@@ -2075,22 +2130,25 @@ class KeywordMonitorService:
 
                     # 红包按钮点击模式
                     if red_packet_mode == "button":
-                        await self._click_red_packet_button(
+                        clicked = await self._click_red_packet_button(
                             client=client,
                             rule=rule,
                             message=message,
                         )
-                        await self._notify_red_packet_grab(rule=rule, message=message, chat_title=chat_title)
-                        # 发送随机回复
-                        if variables.get("random_reply"):
-                            reply_delay = float(rule.action.get("auto_reply_delay") or 0)
-                            await self._send_red_packet_reply(
-                                client=client,
-                                rule=rule,
-                                message=message,
-                                reply_text=variables["random_reply"],
-                                reply_delay=reply_delay,
-                            )
+                        if clicked:
+                            await self._notify_red_packet_grab(rule=rule, message=message, chat_title=chat_title)
+                            # 发送随机回复
+                            if variables.get("random_reply"):
+                                reply_delay = float(rule.action.get("auto_reply_delay") or 0)
+                                await self._send_red_packet_reply(
+                                    client=client,
+                                    rule=rule,
+                                    message=message,
+                                    reply_text=variables["random_reply"],
+                                    reply_delay=reply_delay,
+                                )
+                        else:
+                            self._append_rule_log(rule, "红包模式：消息无匹配按钮，跳过")
 
                     await self._execute_continue_actions(
                         account_name=account_name,

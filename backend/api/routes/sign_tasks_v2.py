@@ -131,6 +131,8 @@ class SignTaskOut(BaseModel):
     task_group_id: str = ""
     retry_count: int = 3
     last_run_account_name: str = ""
+    per_account_last_run: Dict[str, Optional[Dict[str, Any]]] = Field(default_factory=dict)
+    per_account_enabled: Dict[str, bool] = Field(default_factory=dict)
 
 
 class ChatOut(BaseModel):
@@ -424,6 +426,108 @@ async def delete_sign_task(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(e),
         ) from e
+
+
+class PerAccountToggle(BaseModel):
+    account_name: str
+    enabled: bool
+
+
+@router.patch("/{task_name}/account-toggle")
+async def toggle_task_account(
+    task_name: str,
+    payload: PerAccountToggle,
+    current_user=Depends(get_current_user),
+):
+    """勾选=为该账号创建任务副本，取消=删除该账号的任务副本"""
+    svc = get_sign_task_service()
+    import json as _json
+    import shutil
+
+    if payload.enabled:
+        # 添加账号：从已有副本复制 config
+        related = svc._find_related_task_infos(task_name)
+        if not related:
+            raise HTTPException(status_code=404, detail="任务不存在")
+        # 取第一个副本的配置作为模板
+        src_acc = related[0].get("account_name", "")
+        src_dir = svc.signs_dir / src_acc / task_name
+        if not src_dir.exists():
+            src_dir = svc.signs_dir / task_name
+        src_cfg = src_dir / "config.json"
+        if not src_cfg.exists():
+            raise HTTPException(status_code=404, detail="源任务配置不存在")
+        with open(src_cfg, "r", encoding="utf-8") as f:
+            config = _json.load(f)
+        # 更新为当前账号
+        config["account_name"] = payload.account_name
+        all_accounts = list(set(
+            (config.get("account_names") or []) + [payload.account_name]
+            + [info.get("account_name") for info in related if info.get("account_name")]
+        ))
+        config["account_names"] = [a for a in all_accounts if a and a != "*"]
+        config["per_account_enabled"] = {
+            a: True for a in config["account_names"] if a != "*"
+        }
+        # 写入新账号目录
+        dst_dir = svc.signs_dir / payload.account_name / task_name
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        with open(dst_dir / "config.json", "w", encoding="utf-8") as f:
+            _json.dump(config, f, ensure_ascii=False, indent=2)
+        # 调度
+        from backend.scheduler import add_or_update_sign_task_job, remove_sign_task_job
+        if config.get("execution_mode") != "listen":
+            add_or_update_sign_task_job(
+                payload.account_name, task_name,
+                config.get("range_start") if config.get("execution_mode") == "range" else config.get("sign_at", "00:00"),
+                enabled=True,
+            )
+        for info in related:
+            acc = info.get("account_name", "")
+            dst_cfg = svc.signs_dir / acc / task_name / "config.json"
+            if not dst_cfg.exists():
+                dst_cfg = svc.signs_dir / task_name / "config.json"
+            if dst_cfg.exists():
+                try:
+                    with open(dst_cfg, "r", encoding="utf-8") as f:
+                        ec = _json.load(f)
+                    ec["account_names"] = config["account_names"]
+                    ec["per_account_enabled"] = config["per_account_enabled"]
+                    with open(dst_cfg, "w", encoding="utf-8") as f:
+                        _json.dump(ec, f, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
+    else:
+        # 删除账号：移除任务目录
+        dst_dir = svc.signs_dir / payload.account_name / task_name
+        if dst_dir.exists():
+            shutil.rmtree(dst_dir)
+        from backend.scheduler import remove_sign_task_job
+        remove_sign_task_job(payload.account_name, task_name)
+        # 更新其他副本的 account_names
+        related = svc._find_related_task_infos(task_name)
+        for info in related:
+            acc = info.get("account_name", "")
+            dst_cfg = svc.signs_dir / acc / task_name / "config.json"
+            if not dst_cfg.exists():
+                dst_cfg = svc.signs_dir / task_name / "config.json"
+            if dst_cfg.exists():
+                try:
+                    with open(dst_cfg, "r", encoding="utf-8") as f:
+                        ec = _json.load(f)
+                    ec["account_names"] = [
+                        a for a in ec.get("account_names", []) if a != payload.account_name
+                    ]
+                    with open(dst_cfg, "w", encoding="utf-8") as f:
+                        _json.dump(ec, f, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
+
+    svc._tasks_cache = None
+    from backend.scheduler import sync_jobs
+    asyncio.ensure_future(sync_jobs())
+    return {"ok": True, "action": "added" if payload.enabled else "removed",
+            "account": payload.account_name, "task": task_name}
 
 
 @router.post("/{task_name}/run", response_model=RunTaskResult)
