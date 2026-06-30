@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { Play, FileText, Edit2, Trash2, Plus, Radio, Clock, Shuffle } from 'lucide-vue-next'
-import { listSignTasks, deleteSignTask, startSignTaskRun, listAccounts, getGlobalSettings } from '../lib/api' 
+import { Play, FileText, Edit2, Trash2, Plus, Radio, Clock, Shuffle, Power, Zap } from 'lucide-vue-next'
+import { listSignTasks, deleteSignTask, startSignTaskRun, toggleSignTask, listAccounts, getGlobalSettings } from '../lib/api' 
 import { useI18n } from '../composables/useI18n'
 import AddTaskModal from '../components/tasks/AddTaskModal.vue'
 import EditTaskModal from '../components/tasks/EditTaskModal.vue'
@@ -25,6 +25,8 @@ const runMenuTask = ref<any>(null)
 const runMenuAccounts = ref<string[]>([])
 const allAccounts = ref<string[]>([])
 const showAccountPicker = ref<string | null>(null)
+
+const runAllLoading = ref(false)
 
 const loadAllAccounts = async () => {
   const token = localStorage.getItem('tg-signer-token') || ''
@@ -300,6 +302,47 @@ const openLogs = (task: any) => {
   logsTask.value = task
   showLogsModal.value = true
 }
+
+const runAllTasks = async () => {
+  const token = localStorage.getItem('tg-signer-token') || ''
+  const runnable = tasks.value.filter((t: any) => 
+    t.raw.enabled !== false && t.raw.execution_mode !== 'listen'
+  )
+  if (runnable.length === 0) {
+    alert('没有可执行的任务（全部已禁用或处于监听模式）')
+    return
+  }
+  if (!confirm(`确认一键执行 ${runnable.length} 个任务？`)) return
+
+  runAllLoading.value = true
+  let done = 0
+  for (const task of runnable) {
+    try {
+      const accounts = getTaskRealAccounts(task.raw)
+      const accountName = accounts[0] || getTaskAccountName(task.raw)
+      if (accountName) {
+        await startSignTaskRun(token, task.name, accountName)
+        done++
+      }
+    } catch (e: any) {
+      console.error(`执行 ${task.name} 失败:`, e)
+    }
+    // 每个任务间隔 500ms，避免请求过快
+    await new Promise(r => setTimeout(r, 500))
+  }
+  runAllLoading.value = false
+  alert(`一键执行完成: ${done}/${runnable.length} 个任务已触发`)
+}
+
+const toggleTaskEnabled = async (task: any) => {
+  const token = localStorage.getItem('tg-signer-token') || ''
+  try {
+    const result = await toggleSignTask(token, task.name)
+    task.raw.enabled = result.enabled
+  } catch (e: any) {
+    alert('切换失败: ' + (e.message || '未知错误'))
+  }
+}
 </script>
 
 <template>
@@ -319,9 +362,20 @@ const openLogs = (task: any) => {
     </div>
 
     <div v-else class="flex flex-col gap-2 pb-20">
-    <div v-if="appTimezone" class="flex items-center gap-1.5 px-1 mb-1">
-      <span class="text-[10px] text-gray-400 uppercase tracking-wide">{{ t('tasks.timezone') }}</span>
-      <router-link to="/settings" class="text-[10px] text-sky-500 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300 bg-sky-50 dark:bg-sky-500/10 px-1.5 py-0.5 rounded font-mono transition-colors" :title="t('tasks.changeTimezone')">{{ appTimezone }}</router-link>
+    <div class="flex items-center justify-between px-1 mb-1">
+      <div v-if="appTimezone" class="flex items-center gap-1.5">
+        <span class="text-[10px] text-gray-400 uppercase tracking-wide">{{ t('tasks.timezone') }}</span>
+        <router-link to="/settings" class="text-[10px] text-sky-500 hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300 bg-sky-50 dark:bg-sky-500/10 px-1.5 py-0.5 rounded font-mono transition-colors" :title="t('tasks.changeTimezone')">{{ appTimezone }}</router-link>
+      </div>
+      <button
+        @click="runAllTasks"
+        :disabled="runAllLoading"
+        class="flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-amber-500 hover:bg-amber-600 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        title="一键执行全部已启用任务"
+      >
+        <Zap class="w-3.5 h-3.5" :class="runAllLoading ? 'animate-pulse' : ''" />
+        <span>{{ runAllLoading ? '执行中...' : '全部执行' }}</span>
+      </button>
     </div>
     <div 
       v-for="task in tasks" :key="task.id"
@@ -432,6 +486,15 @@ const openLogs = (task: any) => {
 
       <!-- Actions Area -->
       <div class="flex items-center justify-between sm:justify-end gap-2 sm:gap-1.5 mt-2 sm:mt-0 transition-opacity duration-200 shrink-0 sm:pl-4">
+        <!-- Enable/Disable Toggle -->
+        <button
+          @click.stop="toggleTaskEnabled(task)"
+          class="flex-1 sm:flex-none flex justify-center items-center gap-1 px-2 py-1.5 rounded transition-colors text-xs"
+          :class="task.raw.enabled !== false ? 'text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-500/10' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800'"
+          :title="task.raw.enabled !== false ? '禁用任务' : '启用任务'"
+        >
+          <Power class="w-3.5 h-3.5" :class="task.raw.enabled !== false ? 'fill-current' : ''" />
+        </button>
         <div class="relative flex-1 sm:flex-none" @click.stop>
           <button 
             @click="task.raw.execution_mode !== 'listen' && handleRun(task)" 

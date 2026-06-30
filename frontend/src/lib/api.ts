@@ -773,6 +773,7 @@ export interface UpdateSignTaskRequest {
   range_end?: string;
   notify_on_failure?: boolean;
   retry_count?: number;
+  enabled?: boolean;
 }
 
 export interface ChatInfo {
@@ -827,6 +828,11 @@ export const updateSignTask = (token: string, name: string, data: UpdateSignTask
 export const deleteSignTask = (token: string, name: string, accountName?: string) =>
   request<{ ok: boolean }>(`/sign-tasks/${encodeURIComponent(name)}${accountName ? `?account_name=${encodeURIComponent(accountName)}` : ''}`, {
     method: "DELETE",
+  }, token);
+
+export const toggleSignTask = (token: string, name: string, accountName?: string) =>
+  request<{ ok: boolean; enabled: boolean }>(`/sign-tasks/${encodeURIComponent(name)}/toggle${accountName ? `?account_name=${encodeURIComponent(accountName)}` : ''}`, {
+    method: "PATCH",
   }, token);
 
 export const runSignTask = (token: string, name: string, accountName: string) =>

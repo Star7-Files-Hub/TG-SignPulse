@@ -1,5 +1,5 @@
 /**
- * TG-SignPulse 稳健 Service Worker
+ * TG-Assistant 稳健 Service Worker
  * ─────────────────────────────────
  * 解决 NetworkFirst 策略中 cache.put() 在断网/响应体消费后抛出
  * "Failed to execute 'put' on 'Cache'" 的问题。
@@ -220,7 +220,7 @@ function _getStrategy(url: URL): 'NetworkFirst' | 'CacheFirst' | 'StaleWhileReva
 }
 
 // ── install / activate 事件 ──
-const STATIC_CACHE = 'tg-signpulse-static-v1'
+const STATIC_CACHE = 'tg-assistant-static-v1'
 const PRECACHE_URLS = self.__WB_MANIFEST || []
 
 self.addEventListener('install', (event: ExtendableEvent) => {

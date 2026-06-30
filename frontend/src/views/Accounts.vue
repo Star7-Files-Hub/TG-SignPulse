@@ -65,6 +65,8 @@ const loadAccounts = async () => {
 }
 
 const loadAvatar = async (acc: any) => {
+  if (acc._avatarLoading) return
+  acc._avatarLoading = true
   const token = localStorage.getItem('tg-signer-token') || ''
   try {
     const res = await fetch(`/api/accounts/${encodeURIComponent(acc.name)}/avatar`, {
@@ -76,8 +78,9 @@ const loadAvatar = async (acc: any) => {
     }
   } catch {
     // No avatar available, keep fallback
+  } finally {
+    acc._avatarLoading = false
   }
-  acc.avatarLoaded = true
 }
 
 onMounted(() => {

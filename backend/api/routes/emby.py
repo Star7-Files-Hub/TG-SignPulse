@@ -47,7 +47,8 @@ class EmbyAccountIn(BaseModel):
     server_url: str = Field(..., description="Emby 服务器地址，如 https://emby.example.com")
     username: str = Field(...)
     password: str = Field(...)
-    user_agent: str = Field("", description="空则随机选取")
+    user_agent: str = Field("", description="空则根据 device_type 随机选取")
+    device_type: str = Field("iPhone", description="iPhone | Android")
 
 
 class EmbyTaskIn(BaseModel):
@@ -238,10 +239,26 @@ async def _execute_task(task: dict) -> None:
         username = acc["username"]
         password = acc["password"]
         ua = acc.get("user_agent", "")
+        dev = acc.get("device_type", "iPhone")
 
-        client = EmbyClient(server, username, password, ua)
+        client = EmbyClient(server, username, password, ua, dev)
         try:
+            _add_watch_log(
+                task_id=task["id"], task_name=task_name,
+                account=username, server=server,
+                item="⏳ 连接中...", duration=0,
+                success=True, error="",
+            )
             result = await client.simulate_watch(minutes=minutes, mark_watched=mark)
+            # 记录中间步骤日志
+            for step_msg in result.logs:
+                _add_watch_log(
+                    task_id=task["id"], task_name=task_name,
+                    account=username, server=server,
+                    item=step_msg, duration=0,
+                    success="❌" not in step_msg, error="" if "❌" not in step_msg else step_msg,
+                )
+            # 最终结果日志
             _add_watch_log(
                 task_id=task["id"], task_name=task_name,
                 account=username, server=server,

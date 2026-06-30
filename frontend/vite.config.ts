@@ -14,8 +14,8 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
       },
       manifest: {
-        name: 'TG-SignPulse',
-        short_name: 'SignPulse',
+        name: 'TG-Assistant',
+        short_name: 'TG-Assistant',
         description: 'Telegram Automation Panel',
         theme_color: '#111827',
         background_color: '#f9fafb',

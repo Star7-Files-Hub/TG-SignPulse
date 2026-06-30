@@ -168,7 +168,7 @@ async def on_startup() -> None:
     Base.metadata.create_all(bind=get_engine())
     with get_session_local()() as db:
         ensure_admin(db)
-    await init_scheduler(sync_on_startup=False)
+    await init_scheduler(sync_on_startup=True)
 
     # 迁移旧扁平会话文件到按账号隔离的目录
     from tg_signer.core import migrate_sessions_to_account_dirs

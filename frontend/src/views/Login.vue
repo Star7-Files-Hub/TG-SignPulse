@@ -55,7 +55,7 @@ const handleLogin = async () => {
 }
 
 const openGithub = () => {
-  window.open('https://github.com/akasls/TG-SignPulse', '_blank')
+  window.open('https://github.com/akasls/TG-Assistant', '_blank')
 }
 </script>
 
@@ -64,7 +64,7 @@ const openGithub = () => {
     <div class="w-full max-w-sm px-8 py-10 bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800/60">
       <div class="mb-8 text-center">
         <div class="w-12 h-12 bg-gray-900 dark:bg-gray-100 mx-auto flex items-center justify-center text-white dark:text-gray-950 font-bold text-lg mb-4">TG</div>
-        <h1 class="text-xl font-medium text-gray-900 dark:text-gray-100 tracking-wide">SIGNPULSE</h1>
+        <h1 class="text-xl font-medium text-gray-900 dark:text-gray-100 tracking-wide">TG-ASSISTANT</h1>
       </div>
 
       <form @submit.prevent="handleLogin" class="space-y-4">

@@ -106,6 +106,7 @@ class SignTaskUpdate(BaseModel):
     range_end: Optional[str] = Field(None, description="Range end")
     notify_on_failure: Optional[bool] = Field(None, description="Failure notification switch")
     retry_count: Optional[int] = Field(None, description="Retry count per task")
+    enabled: Optional[bool] = Field(None, description="Enable/disable task")
 
 
 class LastRunInfo(BaseModel):
@@ -385,6 +386,7 @@ async def update_sign_task(
             range_end=payload.range_end,
             notify_on_failure=payload.notify_on_failure,
             retry_count=payload.retry_count,
+            enabled=payload.enabled,
         )
 
         from backend.scheduler import sync_jobs
@@ -528,6 +530,41 @@ async def toggle_task_account(
     asyncio.ensure_future(sync_jobs())
     return {"ok": True, "action": "added" if payload.enabled else "removed",
             "account": payload.account_name, "task": task_name}
+
+
+@router.patch("/{task_name}/toggle")
+async def toggle_sign_task(
+    task_name: str,
+    account_name: Optional[str] = None,
+    current_user=Depends(get_current_user),
+):
+    """全局启用/禁用签到任务"""
+    svc = get_sign_task_service()
+    effective_account = account_name if (account_name and account_name != "*") else None
+    task = svc.get_task(task_name, account_name=effective_account, aggregate=effective_account is None)
+    if not task:
+        raise HTTPException(status_code=404, detail=f"任务 {task_name} 不存在")
+
+    new_enabled = not task.get("enabled", True)
+    # 更新所有副本的 enabled 状态
+    related = svc._find_related_task_infos(task_name)
+    if not related:
+        related = [task]
+    for info in related:
+        acc = info.get("account_name", "")
+        try:
+            svc.update_task(
+                task_name=task_name,
+                account_name=acc or None,
+                enabled=new_enabled,
+            )
+        except Exception:
+            pass
+
+    svc._tasks_cache = None
+    from backend.scheduler import sync_jobs
+    await sync_jobs()
+    return {"ok": True, "enabled": new_enabled}
 
 
 @router.post("/{task_name}/run", response_model=RunTaskResult)

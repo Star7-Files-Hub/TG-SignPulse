@@ -13,7 +13,6 @@ Emby 保号服务 —— 模拟播放会话，保持 Emby 账号活跃。
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import random
 from dataclasses import dataclass, field
@@ -24,14 +23,24 @@ import httpx
 
 logger = logging.getLogger("tg_signpulse.emby")
 
-# ── User-Agent 列表（模拟真实客户端） ──
-_DEFAULT_USER_AGENTS = [
+# ── User-Agent 列表（按设备类型区分） ──
+_IOS_USER_AGENTS = [
     "SenPlayer/6.1.2 CFNetwork/1490.0.4 Darwin/23.2.0",
-    "Yamby/2.0.3.4(Android)",
-    "Hills/0.2.1",
     "Lenna/1.0.15 CFNetwork/1494.0.7 Darwin/23.4.0",
     "VidHub/2.2.4",
+    "Fileball/1.3.26 CFNetwork/1490.0.4 Darwin/23.2.0",
 ]
+_ANDROID_USER_AGENTS = [
+    "Yamby/2.0.3.4(Android)",
+    "Hills/0.2.1",
+    "SenPlayer/6.1.2(Android)",
+]
+
+# ── 设备配置 ──
+_DEVICE_CONFIG: dict[str, dict[str, str]] = {
+    "iPhone": {"client": "SenPlayer", "version": "6.1.0", "prefix": "iPhone"},
+    "Android": {"client": "Yamby", "version": "2.0.3.4", "prefix": "Android"},
+}
 
 
 @dataclass
@@ -40,7 +49,8 @@ class EmbyAccount:
     server_url: str          # https://emby.example.com
     username: str
     password: str
-    user_agent: str = ""     # 空则随机选取
+    user_agent: str = ""     # 空则根据 device_type 随机选取
+    device_type: str = "iPhone"  # iPhone | Android
 
 
 @dataclass
@@ -64,20 +74,26 @@ class EmbyWatchResult:
     duration_seconds: float = 0
     success: bool = False
     error: str = ""
+    logs: list[str] = field(default_factory=list)
 
 
 class EmbyClient:
     """Emby REST API 客户端"""
 
     def __init__(self, server_url: str, username: str, password: str,
-                 user_agent: str = ""):
+                 user_agent: str = "", device_type: str = "iPhone"):
         self.server = server_url.rstrip("/")
         self.username = username
         self.password = password
-        self.ua = user_agent or random.choice(_DEFAULT_USER_AGENTS)
+        self.device_type = device_type if device_type in _DEVICE_CONFIG else "iPhone"
+        self._dc = _DEVICE_CONFIG[self.device_type]
+        self.ua = user_agent or random.choice(
+            _IOS_USER_AGENTS if self.device_type == "iPhone" else _ANDROID_USER_AGENTS
+        )
         self._token: str = ""
         self._user_id: str = ""
-        self._device_id: str = f"iPhone-{hashlib.md5(f'{username}@{server_url}'.encode()).hexdigest()[:8]}"
+        self._device_id: str = self._dc["prefix"]
+        self._play_session_id: str = ""  # 跨 Playing/Progress/Stopped 保持一致
         self._http = httpx.AsyncClient(timeout=20)
 
     async def close(self) -> None:
@@ -112,12 +128,11 @@ class EmbyClient:
 
     def _auth_header(self, token: str = "") -> str:
         t = token or self._token
-        # 格式对齐 Bemby / Emby 官方客户端
         parts = [
-            'MediaBrowser Client="SenPlayer"',
+            f'MediaBrowser Client="{self._dc["client"]}"',
             f'Device="{self._device_id}"',
             f'DeviceId="{self._device_id}"',
-            'Version="6.1.0"',
+            f'Version="{self._dc["version"]}"',
         ]
         if t:
             parts.append(f'Token="{t}"')
@@ -163,14 +178,17 @@ class EmbyClient:
                             position_ticks: int = 0) -> bool:
         """报告播放开始"""
         try:
-            play_session_id = f"tgsp-{random.randint(100000, 999999)}"
+            self._play_session_id = f"tgsp-{random.randint(100000, 999999)}"
             payload: dict = {
                 "ItemId": item_id,
                 "MediaSourceId": media_source_id or item_id,
-                "PlaySessionId": play_session_id,
+                "PlaySessionId": self._play_session_id,
+                "PlayMethod": "Transcode",
                 "PositionTicks": position_ticks,
                 "IsPaused": False,
+                "IsMuted": False,
                 "CanSeek": True,
+                "RepeatMode": "RepeatNone",
             }
 
             resp = await self._http.post(
@@ -190,9 +208,13 @@ class EmbyClient:
             payload: dict = {
                 "ItemId": item_id,
                 "MediaSourceId": media_source_id or item_id,
+                "PlaySessionId": self._play_session_id,
                 "PositionTicks": position_ticks,
                 "IsPaused": is_paused,
+                "IsMuted": False,
                 "CanSeek": True,
+                "RepeatMode": "RepeatNone",
+                "EventName": "timeupdate",
             }
 
             resp = await self._http.post(
@@ -212,6 +234,7 @@ class EmbyClient:
             payload: dict = {
                 "ItemId": item_id,
                 "MediaSourceId": media_source_id or item_id,
+                "PlaySessionId": self._play_session_id,
                 "PositionTicks": position_ticks,
             }
 
@@ -251,13 +274,17 @@ class EmbyClient:
         if not await self.login():
             result.error = "登录失败"
             log_msgs.append("❌ Emby 登录失败")
+            result.logs = log_msgs
             return result
+        log_msgs.append(f"✅ 登录成功 ({self.username}@{self.server})")
+        logger.info("Emby 登录成功: %s@%s", self.username, self.server)
 
         # 随机选影片
         item = await self.get_random_item()
         if not item:
             result.error = "未找到可播放的媒体"
             log_msgs.append("❌ 媒体库为空")
+            result.logs = log_msgs
             return result
 
         item_name = item.get("Name") or item.get("OriginalTitle") or item.get("Id", "?")
@@ -265,6 +292,9 @@ class EmbyClient:
         media_sources = item.get("MediaSources", [])
         media_source_id = media_sources[0]["Id"] if media_sources else ""
         run_time_ticks = item.get("RunTimeTicks", 0)  # 总时长（100ns 单位）
+
+        log_msgs.append(f"📺 选中: {item_name}")
+        logger.info("Emby 选中影片: %s (id=%s)", item_name, item_id)
 
         # 计算播放时长
         target_seconds = minutes * 60
@@ -285,7 +315,11 @@ class EmbyClient:
         # 开始播放
         if not await self.start_playing(item_id, media_source_id, start_ticks):
             result.error = "开始播放失败"
+            log_msgs.append("❌ 开始播放失败")
+            result.logs = log_msgs
             return result
+        log_msgs.append("▶ 播放开始")
+        logger.info("Emby 播放开始: %s, total %ds", item_name, int(end_seconds))
 
         current_ticks = start_ticks
         elapsed = 0.0
@@ -298,13 +332,19 @@ class EmbyClient:
                 # 单次进度失败不中断
                 pass
 
+        log_msgs.append(f"⏹ 播放停止 (实际 {elapsed:.0f}s)")
+        logger.info("Emby 播放完成: %s, %ds", item_name, elapsed)
+
         # 停止
         await self.stop_playing(item_id, media_source_id, end_ticks)
 
         # 标记已看
         if mark_watched:
             await self.mark_played(item_id)
+            log_msgs.append("📌 已标记为已看")
+            logger.info("Emby 标记已看: %s", item_name)
 
         result.success = True
         result.duration_seconds = elapsed
+        result.logs = log_msgs
         return result

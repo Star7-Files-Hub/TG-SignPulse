@@ -618,18 +618,18 @@ async def get_account_avatar(
     cache_file = avatar_cache_dir / f"{account_name}.jpg"
     no_avatar_marker = avatar_cache_dir / f"{account_name}.no_avatar"
 
-    # 如果已标记为无头像（7天内），直接返回 404
+    # 如果已标记为无头像（1小时内），直接返回 404
     if no_avatar_marker.exists():
         age = time.time() - no_avatar_marker.stat().st_mtime
-        if age < 604800:
+        if age < 3600:
             raise HTTPException(status_code=404, detail="No avatar available")
         else:
             no_avatar_marker.unlink(missing_ok=True)
 
-    # 如果缓存存在且不超过 7 天，直接返回
+    # 如果缓存存在且不超过 24 小时，直接返回
     if cache_file.exists():
         age = time.time() - cache_file.stat().st_mtime
-        if age < 604800:
+        if age < 86400:
             return FileResponse(cache_file, media_type="image/jpeg")
 
     # 尝试下载头像

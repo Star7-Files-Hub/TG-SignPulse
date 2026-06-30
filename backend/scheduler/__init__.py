@@ -95,14 +95,8 @@ async def _job_run_sign_task(account_name: str, task_name: str) -> None:
                     start_time = _parse_clock_time(range_start_str)
                     end_time = _parse_clock_time(range_end_str)
 
-                    # 转换为当前日期的 datetime
+                    # 转换为当前日期的 datetime（使用调度器时区）
                     now = datetime.now()
-                    start_dt = now.replace(
-                        hour=start_time.hour,
-                        minute=start_time.minute,
-                        second=start_time.second,
-                        microsecond=0,
-                    )
                     end_dt = now.replace(
                         hour=end_time.hour,
                         minute=end_time.minute,
@@ -110,23 +104,19 @@ async def _job_run_sign_task(account_name: str, task_name: str) -> None:
                         microsecond=0,
                     )
 
-                    # 如果结束时间小于开始时间，假设是第二天（虽然CRON触发通常在开始时间，这里做个防御）
-                    if end_dt < start_dt:
-                        end_dt += timedelta(days=1)
-
-                    # 计算总秒数
-                    total_seconds = (end_dt - start_dt).total_seconds()
-
-                    if total_seconds > 0:
-                        # 生成随机延迟
-                        delay_seconds = random.uniform(0, total_seconds)
+                    # 如果结束时间小于当前时间，可能已过期，直接执行（不延迟）
+                    remaining_seconds = (end_dt - now).total_seconds()
+                    if remaining_seconds <= 0:
                         logger.info(
-                            f"Scheduler: 任务 {task_name} 设置为随机时间段模式 ({range_start_str} - {range_end_str})"
+                            f"Scheduler: 任务 {task_name} 当前时间已超过 range_end ({range_end_str})，立即执行"
                         )
+                    else:
+                        # 随机延迟：范围从 0 到「当前到 range_end 的剩余秒数」，保证不超出结束时间
+                        delay_seconds = random.uniform(0, remaining_seconds)
                         logger.info(
-                            f"Scheduler: 将随机等待 {int(delay_seconds)} 秒 ({delay_seconds / 60:.2f} 分钟) 后执行"
+                            f"Scheduler: 任务 {task_name} 随机时间段 ({range_start_str} - {range_end_str})，"
+                            f"剩余窗口 {int(remaining_seconds)}s，延迟 {int(delay_seconds)}s 后执行"
                         )
-
                         await asyncio.sleep(delay_seconds)
 
                 except Exception as e:

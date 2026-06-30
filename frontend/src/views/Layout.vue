@@ -24,12 +24,12 @@ const navigation = [
 
 const currentTitle = computed(() => {
   const current = navigation.find(n => n.name === route.name)
-  if (!current) return 'TG-SignPulse'
+  if (!current) return 'TG-Assistant'
   return t(current.labelKey)
 })
 
 const openGithub = () => {
-  window.open('https://github.com/akasls/TG-SignPulse', '_blank')
+  window.open('https://github.com/akasls/TG-Assistant', '_blank')
 }
 
 const handleNavClick = () => {
@@ -51,7 +51,7 @@ const handleNavClick = () => {
     >
       <div class="flex items-center h-16 px-5 border-b border-gray-200 dark:border-gray-800/60">
         <div class="w-6 h-6 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-950 flex items-center justify-center shrink-0 font-bold text-xs tracking-tighter">TG</div>
-        <span class="ml-4 font-mono font-medium tracking-widest text-gray-900 dark:text-gray-100 whitespace-nowrap">SIGNPULSE</span>
+        <span class="ml-4 font-mono font-medium tracking-widest text-gray-900 dark:text-gray-100 whitespace-nowrap">TG-ASSISTANT</span>
       </div>
 
       <nav class="flex-1 py-6 flex flex-col gap-2 px-3 overflow-y-auto custom-scrollbar">

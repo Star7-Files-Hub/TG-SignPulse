@@ -21,7 +21,7 @@
               <div class="flex items-center gap-2">
                 <span v-if="runningTask === task.id" class="text-[10px] text-sky-500 animate-pulse">⏳</span>
                 <span class="text-sm font-medium text-gray-900 dark:text-gray-100">{{ task.name }}</span>
-                <span :class="task.enabled ? 'text-emerald-500' : 'text-gray-400'" class="text-[10px]">{{ task.enabled ? '●' : '○' }}</span>
+                <span @click="toggleEnabled(task)" :class="task.enabled ? 'text-emerald-500 cursor-pointer hover:text-emerald-700' : 'text-gray-400 cursor-pointer hover:text-gray-600'" class="text-[10px] select-none" :title="task.enabled ? '点击禁用' : '点击启用'">{{ task.enabled ? '●' : '○' }}</span>
               </div>
             <div class="flex items-center gap-1">
               <button @click="runNow(task)" title="立即执行" class="text-[10px] px-1.5 text-sky-500 hover:text-sky-700">▶</button>
@@ -80,6 +80,12 @@
                 <div class="grid grid-cols-2 gap-2">
                   <input v-model="acc.username" placeholder="用户名" class="w-full h-8 px-2 text-xs border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-sky-400" />
                   <input v-model="acc.password" type="password" placeholder="密码" class="w-full h-8 px-2 text-xs border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-sky-400" />
+                </div>
+                <div>
+                  <select v-model="acc.device_type" class="w-full h-8 px-2 text-xs border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-sky-400">
+                    <option value="iPhone">📱 iPhone</option>
+                    <option value="Android">🤖 Android</option>
+                  </select>
                 </div>
               </div>
             </div>
@@ -153,8 +159,8 @@ const form = reactive({
 
 function resetForm(src?: any) {
   form.name = src?.name || ''
-  form.accounts = (src?.accounts || []).map((a: any) => ({ server_url: a.server_url || '', username: a.username || '', password: a.password || '' }))
-  if (form.accounts.length === 0) form.accounts.push({ server_url: '', username: '', password: '' })
+  form.accounts = (src?.accounts || []).map((a: any) => ({ server_url: a.server_url || '', username: a.username || '', password: a.password || '', device_type: a.device_type || 'iPhone' }))
+  if (form.accounts.length === 0) form.accounts.push({ server_url: '', username: '', password: '', device_type: 'iPhone' })
   form.watch_minutes = src?.watch_minutes || 30
   form.mark_watched = src?.mark_watched || false
   form.time_range = src?.time_range || '08:00-22:00'
@@ -173,7 +179,7 @@ const openEdit = (t: EmbyTask) => {
   formError.value = ''
   showModal.value = true
 }
-const addAccount = () => form.accounts.push({ server_url: '', username: '', password: '' })
+const addAccount = () => form.accounts.push({ server_url: '', username: '', password: '', device_type: 'iPhone' })
 
 const save = async () => {
   const token = localStorage.getItem('tg-signer-token') || ''
@@ -184,6 +190,7 @@ const save = async () => {
       username: a.username || '',
       password: a.password || '',
       user_agent: form.user_agent || '',
+      device_type: a.device_type || 'iPhone',
     }))
     const data = {
       name: form.name,
@@ -191,10 +198,10 @@ const save = async () => {
       watch_minutes: form.watch_minutes,
       mark_watched: form.mark_watched,
       time_range: form.time_range,
-      enabled: true,
+      enabled: editing.value ? editing.value.enabled : true,
     }
     if (editing.value) await updateEmbyTask(token, editing.value.id, data)
-    else await createEmbyTask(token, data)
+    else await createEmbyTask(token, { ...data, enabled: true })
     showModal.value = false
     await refresh()
   } catch (e: any) { formError.value = e.message || '保存失败' }
@@ -205,6 +212,15 @@ const confirmDelete = async (t: EmbyTask) => {
   const token = localStorage.getItem('tg-signer-token') || ''
   await deleteEmbyTask(token, t.id)
   await refresh()
+}
+const toggleEnabled = async (t: EmbyTask) => {
+  const token = localStorage.getItem('tg-signer-token') || ''
+  try {
+    await updateEmbyTask(token, t.id, { enabled: !t.enabled })
+    await refresh()
+  } catch (e: any) {
+    alert('切换失败: ' + (e.message || '未知错误'))
+  }
 }
 const runningTask = ref('')
 const runNow = async (t: EmbyTask) => {

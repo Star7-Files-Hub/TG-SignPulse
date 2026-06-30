@@ -27,6 +27,35 @@ from backend.utils.tg_session import (
 
 logger = logging.getLogger("backend.keyword_monitor")
 settings = get_settings()
+
+# ── 独立日志文件（避免 INFO 被 uvicorn --log-level warning 过滤掉）──
+_monitor_log_setup: bool = False
+
+def _setup_monitor_logfile() -> None:
+    global _monitor_log_setup
+    if _monitor_log_setup:
+        return
+    _monitor_log_setup = True
+    try:
+        from logging.handlers import RotatingFileHandler
+        logs_dir = settings.resolve_logs_dir()
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            logs_dir / "monitor.log",
+            maxBytes=5 * 1024 * 1024,  # 5 MB
+            backupCount=3,
+            encoding="utf-8",
+        )
+        handler.setLevel(logging.DEBUG)
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        ))
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = True  # 同时输出到 stderr（error.log 可见 WARNING+）
+    except Exception:
+        pass
 _PYROGRAM_IMPORT_ERROR: Exception | None = None
 
 try:
@@ -440,6 +469,7 @@ def _message_has_terminal_success_text(message: Message) -> bool:
 
 class KeywordMonitorService:
     def __init__(self) -> None:
+        _setup_monitor_logfile()  # 确保 monitor.log FileHandler 已就位
         self._handler_refs: list[tuple[str, Any, Any]] = []
         self._rules: list[KeywordMonitorRule] = []
         self._active_key = ""
@@ -1920,7 +1950,7 @@ class KeywordMonitorService:
                     else None
                 )
                 if forward_chat_id is not None:
-                    logger.warning(
+                    logger.info(
                         "FWD_ENTRY [%s] push_channel=forward target=%s msg_chat=%s msg_id=%s text_len=%s",
                         account_name, forward_chat_id, getattr(message.chat, 'id', ''), message.id, len(text or ""),
                     )
@@ -1999,7 +2029,7 @@ class KeywordMonitorService:
                                 if now - v[0] < 60
                             }
 
-                        logger.warning(
+                        logger.info(
                             "FWD_DEDUP_PASS [%s] 去重已通过，准备转发 msg=%s chat=%s",
                             account_name, message.id, getattr(message.chat, 'id', ''),
                         )
@@ -2066,7 +2096,7 @@ class KeywordMonitorService:
                                 else:
                                     clean_chat = raw_chat_id[4:] if raw_chat_id.startswith("-100") else raw_chat_id.lstrip("-")
                                     msg_link = f"https://t.me/c/{clean_chat}/{message.id}"
-                        logger.warning(
+                        logger.info(
                             "FWD_LINK [%s] raw_chat=%s fwd_src_chat=%s fwd_msg_id=%s fo_chat=%s existing_link=%s final_link=%s text_has_emoji=%s",
                             account_name, raw_chat_id, fwd_src_chat_id, fwd_from_msg_id, fo_chat_id, existing_link, msg_link,
                             bool(re.search(r'🔗', text or '')),
@@ -2076,7 +2106,7 @@ class KeywordMonitorService:
                         self._chat_link_cache[str(forward_chat_id)] = (now, msg_link)
 
                         # ── 步骤 3：原生转发消息（带「已转发」标识）──
-                        logger.warning(
+                        logger.info(
                             "FWD_FORWARDING [%s] forward_messages → target=%s from_chat=%s msg_ids=[%s]",
                             account_name, forward_chat_id, getattr(message.chat, 'id', ''), message.id,
                         )
@@ -2103,7 +2133,7 @@ class KeywordMonitorService:
                             f"✅ 转发成功 → {chat_title}({raw_chat_id}) → {forward_chat_id}"
                             + (f"，话题ID={forward_thread_id}" if forward_thread_id is not None else ""),
                         )
-                        logger.warning(
+                        logger.info(
                             "FWD_DONE [%s] chat=%s → target=%s link=%s",
                             account_name, raw_chat_id, forward_chat_id, msg_link,
                         )
