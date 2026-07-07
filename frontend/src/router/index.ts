@@ -27,7 +27,7 @@ const router = createRouter({
 })
 
 router.beforeEach((to) => {
-  const token = localStorage.getItem('tg-signer-token')
+  const token = localStorage.getItem('tg-assistant-token')
   if (to.name !== 'login' && !token) {
     return { name: 'login' }
   } else if (to.name === 'login' && token) {
@@ -35,7 +35,7 @@ router.beforeEach((to) => {
     try {
       const payload = JSON.parse(atob(token.split('.')[1]))
       if (payload.exp && payload.exp * 1000 < Date.now()) {
-        localStorage.removeItem('tg-signer-token')
+        localStorage.removeItem('tg-assistant-token')
         return { name: 'login' }
       }
     } catch {

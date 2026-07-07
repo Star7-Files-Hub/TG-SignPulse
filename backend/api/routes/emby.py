@@ -233,7 +233,7 @@ def get_emby_logs(limit: int = 100, current_user: User = Depends(get_current_use
 async def _execute_task(task: dict) -> None:
     """执行单个 Emby 保号任务"""
     import logging
-    log = logging.getLogger("tg_signpulse.emby")
+    log = logging.getLogger("tg_assistant.emby")
 
     def _update_status(result_text: str) -> None:
         try:

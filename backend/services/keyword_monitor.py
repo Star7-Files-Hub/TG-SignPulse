@@ -747,7 +747,7 @@ class KeywordMonitorService:
             account_name
             for account_name, client, _handler_ref in self._handler_refs
             if getattr(client, "is_connected", False)
-            and getattr(client, "_tg_signpulse_no_updates", None) is False
+            and getattr(client, "_tg_assistant_no_updates", None) is False
         }
         return expected_accounts.issubset(active_accounts)
 
@@ -2341,7 +2341,7 @@ class KeywordMonitorService:
                     existing = _CLIENT_INSTANCES.get(base_key) or _CLIENT_INSTANCES.get(memory_key)
                     if (
                         existing is not None
-                        and getattr(existing, "_tg_signpulse_no_updates", None) is True
+                        and getattr(existing, "_tg_assistant_no_updates", None) is True
                     ):
                         logger.info(
                             "Recreating keyword monitor client for %s (was no_updates=True) with updates enabled",

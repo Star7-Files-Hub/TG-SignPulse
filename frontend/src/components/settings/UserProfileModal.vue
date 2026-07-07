@@ -27,7 +27,7 @@ const error = ref('')
 const successMessage = ref('')
 
 const handleUsernameChange = async () => {
-  const token = localStorage.getItem('tg-signer-token')
+  const token = localStorage.getItem('tg-assistant-token')
   if (!token) return
 
   loading.value = true
@@ -40,7 +40,7 @@ const handleUsernameChange = async () => {
     usernameForm.value.password = ''
     // If a new token is returned, update it
     if (res.access_token) {
-      localStorage.setItem('tg-signer-token', res.access_token)
+      localStorage.setItem('tg-assistant-token', res.access_token)
     }
   } catch (e: any) {
     error.value = e.message || t('profile.changeFailed')
@@ -50,7 +50,7 @@ const handleUsernameChange = async () => {
 }
 
 const handlePasswordChange = async () => {
-  const token = localStorage.getItem('tg-signer-token')
+  const token = localStorage.getItem('tg-assistant-token')
   if (!token) return
 
   loading.value = true
@@ -75,7 +75,7 @@ const totpCode = ref('')
 const totpSecret = ref('')
 
 const checkTOTP = async () => {
-  const token = localStorage.getItem('tg-signer-token')
+  const token = localStorage.getItem('tg-assistant-token')
   if (!token) return
   try {
     const res = await getTOTPStatus(token)
@@ -107,7 +107,7 @@ watch(() => props.isOpen, (val) => {
 
 const handleEnableTOTP = async () => {
   if (!totpCode.value) return
-  const token = localStorage.getItem('tg-signer-token')
+  const token = localStorage.getItem('tg-assistant-token')
   if (!token) return
 
   loading.value = true
@@ -126,7 +126,7 @@ const handleEnableTOTP = async () => {
 
 const handleDisableTOTP = async () => {
   if (!totpCode.value) return
-  const token = localStorage.getItem('tg-signer-token')
+  const token = localStorage.getItem('tg-assistant-token')
   if (!token) return
 
   loading.value = true
@@ -144,7 +144,7 @@ const handleDisableTOTP = async () => {
 }
 
 const handleLogout = () => {
-  localStorage.removeItem('tg-signer-token')
+  localStorage.removeItem('tg-assistant-token')
   router.push('/login')
 }
 </script>

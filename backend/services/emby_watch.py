@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-logger = logging.getLogger("tg_signpulse.emby")
+logger = logging.getLogger("tg_assistant.emby")
 
 # ── User-Agent 列表（按设备类型区分） ──
 _IOS_USER_AGENTS = [

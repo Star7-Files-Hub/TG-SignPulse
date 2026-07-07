@@ -4,11 +4,8 @@ from datetime import datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from sqlalchemy.orm import Session
 
 from backend.core.database import get_session_local
-from backend.models.task import Task
-from backend.services.tasks import run_task_once
 
 scheduler: AsyncIOScheduler | None = None
 
@@ -49,17 +46,6 @@ def create_cron_trigger(cron_str: str) -> CronTrigger:
     return CronTrigger.from_crontab(cron_str)
 
 
-async def _job_run_task(task_id: int) -> None:
-    db: Session = get_session_local()()
-    try:
-        # 此查询是同步的，在 SQLite/PostgreSQL 都是轻量操作
-        task = db.query(Task).filter(Task.id == task_id).first()
-        if not task or not task.enabled:
-            return
-        # run_task_once 将被改为 async
-        await run_task_once(db, task)
-    finally:
-        db.close()
 
 
 async def _job_run_sign_task(account_name: str, task_name: str) -> None:
@@ -134,29 +120,20 @@ async def _job_run_sign_task(account_name: str, task_name: str) -> None:
 
 
 async def _job_maintenance() -> None:
-    """每日维护任务：清理旧日志等"""
-    db: Session = get_session_local()()
+    """每日维护任务：清理旧日志和过期状态"""
     try:
         from backend.services.sign_tasks import get_sign_task_service
-        from backend.services.tasks import cleanup_old_logs
 
-        # 清理数据库任务日志
-        count = cleanup_old_logs(db, days=3)
-        print(f"Maintenance: 已清理 {count} 条数据库任务日志")
-
-        # 清理签到任务日志
         sign_service = get_sign_task_service()
         sign_service._cleanup_old_logs()
-
-        # 清理内存中的过期状态
         sign_service._prune_stale_entries()
-    finally:
-        db.close()
+    except Exception as e:
+        print(f"Maintenance job failed: {e}")
 
 
 async def sync_jobs() -> None:
     """
-    Sync APScheduler jobs from DB tasks table and file-based sign tasks.
+    Sync APScheduler jobs from file-based sign tasks.
     """
     if scheduler is None:
         return
@@ -180,94 +157,66 @@ async def sync_jobs() -> None:
     # 时区变更时，移除所有旧 job（它们用的是旧时区），后面会重新创建
     if tz_changed:
         for job in list(scheduler.get_jobs()):
-            if job.id.startswith(("sign-task-", "sign-", "db-", "emby-")):
+            if job.id.startswith(("sign-", "emby-")):
                 job.remove()
 
     from backend.services.sign_tasks import get_sign_task_service
 
-    db: Session = get_session_local()()
-    try:
-        # 1. 同步数据库任务
-        tasks = db.query(Task).filter(Task.enabled).all()
-        existing_ids = {
-            job.id
-            for job in scheduler.get_jobs()
-            if job.id.startswith("db-") or job.id.startswith("sign-")
-        }
-        desired_ids = set()
+    existing_ids = {
+        job.id
+        for job in scheduler.get_jobs()
+        if job.id.startswith("sign-")
+    }
+    desired_ids = set()
 
-        for task in tasks:
-            job_id = f"db-{task.id}"
-            desired_ids.add(job_id)
+    # 同步签到任务 (SignTask)
+    sign_task_service = get_sign_task_service()
+    # Expand wildcard tasks for newly added accounts
+    sign_task_service._expand_wildcard_tasks()
+    sign_tasks = sign_task_service.list_tasks(force_refresh=True)
+    for st in sign_tasks:
+        account_name = str(st.get("account_name") or "").strip()
+        task_name = str(st.get("name") or "").strip()
+        if not account_name or not task_name:
+            print(f"Skip scheduling sign task with missing account/name: {st}")
+            continue
 
-            try:
-                trigger = create_cron_trigger(task.cron)
-                if job_id in existing_ids:
-                    scheduler.reschedule_job(job_id, trigger=trigger)
-                else:
-                    scheduler.add_job(
-                        _job_run_task,
-                        trigger=trigger,
-                        id=job_id,
-                        args=[task.id],
-                        replace_existing=True,
-                    )
-            except Exception as e:
-                print(f"Error scheduling DB task {task.id}: {e}")
+        job_id = f"sign-{account_name}-{task_name}"
+        desired_ids.add(job_id)
 
-        # 2. 同步签到任务 (SignTask)
-        # 使用缓存的任务列表，减少 I/O
-        sign_task_service = get_sign_task_service()
-        # Expand wildcard tasks for newly added accounts
-        sign_task_service._expand_wildcard_tasks()
-        sign_tasks = sign_task_service.list_tasks(force_refresh=True)
-        for st in sign_tasks:
-            account_name = str(st.get("account_name") or "").strip()
-            task_name = str(st.get("name") or "").strip()
-            if not account_name or not task_name:
-                print(f"Skip scheduling sign task with missing account/name: {st}")
-                continue
+        if not st.get("enabled", True):
+            if job_id in existing_ids:
+                scheduler.remove_job(job_id)
+            continue
 
-            job_id = f"sign-{account_name}-{task_name}"
-            desired_ids.add(job_id)
+        if st.get("execution_mode") == "listen":
+            if job_id in existing_ids:
+                scheduler.remove_job(job_id)
+            continue
 
-            # SignTask 目前默认都是启用的，或者根据 st['enabled']
-            if not st.get("enabled", True):
-                if job_id in existing_ids:
-                    scheduler.remove_job(job_id)
-                continue
+        try:
+            trigger = create_cron_trigger(st["sign_at"])
+            if st.get("execution_mode") == "range" and st.get("range_start"):
+                trigger = create_cron_trigger(st["range_start"])
 
-            if st.get("execution_mode") == "listen":
-                if job_id in existing_ids:
-                    scheduler.remove_job(job_id)
-                continue
+            if job_id in existing_ids:
+                scheduler.reschedule_job(job_id, trigger=trigger)
+            else:
+                scheduler.add_job(
+                    _job_run_sign_task,
+                    trigger=trigger,
+                    id=job_id,
+                    args=[account_name, task_name],
+                    replace_existing=True,
+                )
+        except Exception as e:
+            print(f"Error scheduling sign task {task_name}: {e}")
 
-            try:
-                trigger = create_cron_trigger(st["sign_at"])
-                if st.get("execution_mode") == "range" and st.get("range_start"):
-                    trigger = create_cron_trigger(st["range_start"])
+    # remove obsolete jobs
+    for job_id in existing_ids - desired_ids:
+        scheduler.remove_job(job_id)
 
-                if job_id in existing_ids:
-                    scheduler.reschedule_job(job_id, trigger=trigger)
-                else:
-                    # 使用新的 job wrapper
-                    scheduler.add_job(
-                        _job_run_sign_task,
-                        trigger=trigger,
-                        id=job_id,
-                        args=[account_name, task_name],
-                        replace_existing=True,
-                    )
-            except Exception as e:
-                print(f"Error scheduling sign task {task_name}: {e}")
-
-        # remove obsolete jobs
-        for job_id in existing_ids - desired_ids:
-            scheduler.remove_job(job_id)
-    finally:
-        db.close()
-
-    # 3. 同步 Emby 保号任务
+    # 同步 Emby 保号任务
     try:
         await schedule_emby_jobs()
     except Exception as e:

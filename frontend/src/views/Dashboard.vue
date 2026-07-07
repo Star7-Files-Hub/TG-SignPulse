@@ -38,7 +38,7 @@ onUnmounted(() => {
 })
 
 const loadDashboardData = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   if (!token) return
 
     let accRes: { accounts: any[]; total: number } = { accounts: [], total: 0 }

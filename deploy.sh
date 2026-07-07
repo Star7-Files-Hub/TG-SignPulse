@@ -9,14 +9,14 @@ set -euo pipefail
 # ---- 配置区（可按需修改）----
 APP_PORT="${APP_PORT:-8080}"
 APP_HOST="${APP_HOST:-0.0.0.0}"
-APP_DATA_DIR="${APP_DATA_DIR:-/data/tg-signpulse}"
+APP_DATA_DIR="${APP_DATA_DIR:-/data/tg-assistant}"
 APP_TIMEZONE="${APP_TIMEZONE:-Asia/Shanghai}"
-PROJECT_DIR="/opt/tg-signpulse"
-SERVICE_NAME="tg-signpulse"
+PROJECT_DIR="/opt/tg-assistant"
+SERVICE_NAME="tg-assistant"
 PYTHON_MIN_VERSION="3.10"
 NODE_MIN_VERSION="20"
 # 如果要使用 PostgreSQL，取消下面这行的注释并修改连接信息：
-# DATABASE_URL="postgresql://user:password@localhost:5432/tg_signpulse"
+# DATABASE_URL="postgresql://user:password@localhost:5432/tg_assistant"
 # ------------------------------
 
 RED='\033[0;31m'
@@ -260,7 +260,7 @@ log_step "创建 systemd 服务"
 if [[ "$SUDO_USER" && "$SUDO_USER" != "root" ]]; then
     APP_USER="$SUDO_USER"
 else
-    APP_USER="tg-signpulse"
+    APP_USER="tg-assistant"
     if ! id -u "$APP_USER" &>/dev/null; then
         useradd -r -s /usr/sbin/nologin -m "$APP_USER"
         log_info "创建专用用户: $APP_USER"

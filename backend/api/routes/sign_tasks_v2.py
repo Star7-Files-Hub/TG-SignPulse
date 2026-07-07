@@ -18,12 +18,7 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 
-try:
-    from pydantic import BaseModel, Field, field_validator
-    validator = None
-except ImportError:  # pragma: no cover - pydantic v1 compatibility
-    from pydantic import BaseModel, Field, validator
-    field_validator = None
+from pydantic import BaseModel, Field, validator
 from sqlalchemy.orm import Session
 
 from backend.core.auth import get_current_user, verify_token
@@ -40,13 +35,7 @@ def _model_dump(model: BaseModel) -> Dict[str, Any]:
     return model.dict()
 
 
-async def _restart_keyword_monitors() -> None:
-    try:
-        from backend.services.keyword_monitor import get_keyword_monitor_service
-
-        await get_keyword_monitor_service().restart_from_tasks()
-    except Exception:
-        pass
+from backend.api.routes._utils import trigger_side_effects, resolve_account_name
 
 
 class ChatConfig(BaseModel):
@@ -76,23 +65,13 @@ class SignTaskCreate(BaseModel):
     notify_on_failure: bool = Field(True, description="Failure notification switch")
     retry_count: Optional[int] = Field(None, description="Retry count per task, default 3")
 
-    if field_validator is not None:
-        @field_validator("name")
-        @classmethod
-        def name_must_be_valid_filename(cls, v: str) -> str:
-            if not v or not v.strip():
-                raise ValueError("任务名称不能为空")
-            if '/' in v or '\\' in v:
-                raise ValueError('任务名称不能包含路径分隔符: / \\')
-            return v.strip()
-    else:
-        @validator("name", allow_reuse=True)
-        def name_must_be_valid_filename(cls, v: str) -> str:
-            if not v or not v.strip():
-                raise ValueError("任务名称不能为空")
-            if '/' in v or '\\' in v:
-                raise ValueError('任务名称不能包含路径分隔符: / \\')
-            return v.strip()
+    @validator("name", allow_reuse=True)
+    def name_must_be_valid_filename(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("任务名称不能为空")
+        if '/' in v or '\\' in v:
+            raise ValueError('任务名称不能包含路径分隔符: / \\')
+        return v.strip()
 
 
 class SignTaskUpdate(BaseModel):
@@ -227,8 +206,7 @@ async def create_sign_task(
         from backend.scheduler import sync_jobs
 
         # 调度同步和监控重启放到后台执行，避免阻塞 HTTP 响应
-        asyncio.ensure_future(sync_jobs())
-        asyncio.ensure_future(_restart_keyword_monitors())
+        trigger_side_effects()
         return task
     except HTTPException:
         raise
@@ -294,10 +272,7 @@ async def create_sign_tasks_batch(
             )
             created.append(task)
 
-        from backend.scheduler import sync_jobs
-
-        asyncio.ensure_future(sync_jobs())
-        asyncio.ensure_future(_restart_keyword_monitors())
+        trigger_side_effects()
         return BatchCreateResponse(tasks=created, count=len(created))
     except HTTPException:
         raise
@@ -357,16 +332,7 @@ async def update_sign_task(
             raise HTTPException(status_code=404, detail=f"任务 {task_name} 不存在")
 
         # Resolve a real account_name for update_task (skip wildcard)
-        resolved_account = effective_account or ""
-        if not resolved_account:
-            for name in existing.get("account_names", []):
-                if name and name != "*":
-                    resolved_account = name
-                    break
-            if not resolved_account:
-                resolved_account = existing.get("account_name", "")
-            if resolved_account == "*":
-                resolved_account = ""
+        resolved_account = resolve_account_name(existing, effective_account)
 
         chats_dict = (
             [_model_dump(chat) for chat in payload.chats]
@@ -389,10 +355,7 @@ async def update_sign_task(
             enabled=payload.enabled,
         )
 
-        from backend.scheduler import sync_jobs
-
-        asyncio.ensure_future(sync_jobs())
-        asyncio.ensure_future(_restart_keyword_monitors())
+        trigger_side_effects()
         return task
     except HTTPException:
         raise
@@ -416,10 +379,7 @@ async def delete_sign_task(
         if not success:
             raise HTTPException(status_code=404, detail=f"任务 {task_name} 不存在")
 
-        from backend.scheduler import sync_jobs
-
-        asyncio.ensure_future(sync_jobs())
-        asyncio.ensure_future(_restart_keyword_monitors())
+        trigger_side_effects()
         return {"ok": True}
     except HTTPException:
         raise
@@ -526,8 +486,7 @@ async def toggle_task_account(
                     pass
 
     svc._tasks_cache = None
-    from backend.scheduler import sync_jobs
-    asyncio.ensure_future(sync_jobs())
+    trigger_side_effects()
     return {"ok": True, "action": "added" if payload.enabled else "removed",
             "account": payload.account_name, "task": task_name}
 
@@ -577,15 +536,10 @@ async def run_sign_task(
         resolved_account = account_name
         if not resolved_account or resolved_account == "*":
             task = get_sign_task_service().get_task(task_name, aggregate=True)
+            resolved_account = resolve_account_name(task or {}, account_name)
             if not task:
                 raise HTTPException(status_code=404, detail=f"任务 {task_name} 不存在")
-            for name in task.get("account_names", []):
-                if name and name != "*":
-                    resolved_account = name
-                    break
-            if not resolved_account or resolved_account == "*":
-                resolved_account = task.get("account_name", "")
-            if not resolved_account or resolved_account == "*":
+            if not resolved_account:
                 raise HTTPException(status_code=400, detail="无法确定执行账号")
         else:
             task = get_sign_task_service().get_task(task_name, account_name=resolved_account)
@@ -612,16 +566,10 @@ async def start_sign_task_run(
         resolved_account = account_name
         if not resolved_account or resolved_account == "*":
             task = get_sign_task_service().get_task(task_name, aggregate=True)
+            resolved_account = resolve_account_name(task or {}, account_name)
             if not task:
                 raise HTTPException(status_code=404, detail=f"任务 {task_name} 不存在")
-            # Find first real account from account_names
-            for name in task.get("account_names", []):
-                if name and name != "*":
-                    resolved_account = name
-                    break
-            if not resolved_account or resolved_account == "*":
-                resolved_account = task.get("account_name", "")
-            if not resolved_account or resolved_account == "*":
+            if not resolved_account:
                 raise HTTPException(status_code=400, detail="无法确定执行账号")
         else:
             task = get_sign_task_service().get_task(task_name, account_name=resolved_account)
@@ -648,15 +596,10 @@ def get_sign_task_run_status(
         resolved_account = account_name
         if not resolved_account or resolved_account == "*":
             task = get_sign_task_service().get_task(task_name, aggregate=True)
+            resolved_account = resolve_account_name(task or {}, account_name)
             if not task:
                 raise HTTPException(status_code=404, detail=f"任务 {task_name} 不存在")
-            for name in task.get("account_names", []):
-                if name and name != "*":
-                    resolved_account = name
-                    break
-            if not resolved_account or resolved_account == "*":
-                resolved_account = task.get("account_name", "")
-            if not resolved_account or resolved_account == "*":
+            if not resolved_account:
                 raise HTTPException(status_code=400, detail="无法确定执行账号")
         else:
             task = get_sign_task_service().get_task(task_name, account_name=resolved_account)

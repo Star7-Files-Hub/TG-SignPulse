@@ -50,7 +50,7 @@ const statusOptions = computed(() => [
 ])
 
 const loadAllLogs = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   try {
     const res = await getAllLogs(token, {
       level: allLogLevelFilter.value || undefined,
@@ -74,7 +74,7 @@ const getLevelColor = (level: string) => {
 }
 
 const loadAccounts = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   if (!token) return
   try {
     const res = await listAccounts(token)
@@ -92,7 +92,7 @@ const formatTime = (isoString: string) => {
 }
 
 const loadTaskLogs = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   if (!token) return
 
   try {
@@ -129,7 +129,7 @@ const loadTaskLogs = async () => {
 
 const loginLogs = ref<any[]>([])
 const loadLoginLogs = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   if (!token) return
 
   try {
@@ -152,7 +152,7 @@ const loadLoginLogs = async () => {
 }
 
 const loadEmbyLogs = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   try {
     const res = await getEmbyLogs(token, 200)
     embyLogs.value = res
@@ -181,7 +181,7 @@ const openLogDetail = async (log: any) => {
   logDetail.value = null
 
   // Fetch full detail with flow_logs
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   if (!token || !log.account || !log.task || !log.created_at) return
 
   detailLoading.value = true

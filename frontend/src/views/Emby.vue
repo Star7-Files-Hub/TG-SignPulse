@@ -182,7 +182,7 @@ const openEdit = (t: EmbyTask) => {
 const addAccount = () => form.accounts.push({ server_url: '', username: '', password: '', device_type: 'iPhone' })
 
 const save = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   formLoading.value = true; formError.value = ''
   try {
     const accounts = form.accounts.map(a => ({
@@ -209,12 +209,12 @@ const save = async () => {
 }
 const confirmDelete = async (t: EmbyTask) => {
   if (!confirm(`删除 "${t.name}"？`)) return
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   await deleteEmbyTask(token, t.id)
   await refresh()
 }
 const toggleEnabled = async (t: EmbyTask) => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   try {
     await updateEmbyTask(token, t.id, { enabled: !t.enabled })
     await refresh()
@@ -224,7 +224,7 @@ const toggleEnabled = async (t: EmbyTask) => {
 }
 const runningTask = ref('')
 const runNow = async (t: EmbyTask) => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   runningTask.value = t.id
   try {
     await runEmbyTask(token, t.id)
@@ -257,7 +257,7 @@ const formatLogTime = (s: string) => {
 }
 
 const refresh = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   try {
     tasks.value = await listEmbyTasks(token)
     // 格式化时间

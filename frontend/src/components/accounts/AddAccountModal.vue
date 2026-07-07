@@ -39,7 +39,7 @@ const reset = async () => {
   }
   if (loginId.value) {
     try {
-      const token = localStorage.getItem('tg-signer-token') || ''
+      const token = localStorage.getItem('tg-assistant-token') || ''
       if (token) await cancelQrLogin(token, loginId.value)
     } catch (e) {}
   }
@@ -151,7 +151,7 @@ const handleGetQr = async () => {
     error.value = t('addAccount.nameRequired')
     return
   }
-  const token = localStorage.getItem('tg-signer-token')
+  const token = localStorage.getItem('tg-assistant-token')
   if (!token) return
 
   loading.value = true
@@ -180,7 +180,7 @@ const handleSendCode = async () => {
     error.value = t('addAccount.namePhoneRequired')
     return
   }
-  const token = localStorage.getItem('tg-signer-token')
+  const token = localStorage.getItem('tg-assistant-token')
   if (!token) return
 
   loading.value = true
@@ -203,7 +203,7 @@ const handleSendCode = async () => {
 }
 
 const handleSave = async () => {
-  const token = localStorage.getItem('tg-signer-token')
+  const token = localStorage.getItem('tg-assistant-token')
   if (!token) return
 
   loading.value = true

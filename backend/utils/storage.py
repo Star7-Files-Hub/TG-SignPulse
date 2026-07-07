@@ -8,7 +8,7 @@ from typing import Optional
 
 _BASE_DIR: Optional[Path] = None
 _DATA_DIR_OVERRIDE_FILE_ENV = "APP_DATA_DIR_OVERRIDE_FILE"
-_DEFAULT_DATA_DIR_OVERRIDE_FILE = Path.cwd() / ".tg_signpulse_data_dir"
+_DEFAULT_DATA_DIR_OVERRIDE_FILE = Path.cwd() / ".tg_assistant_data_dir"
 
 def _probe_writable_dir(base: Path) -> bool:
     probe_dir = base / ".probe"
@@ -91,7 +91,7 @@ def get_writable_base_dir() -> Path:
         _BASE_DIR = preferred
         return _BASE_DIR
 
-    fallback = Path(tempfile.gettempdir()) / "tg-signpulse"
+    fallback = Path(tempfile.gettempdir()) / "tg-assistant"
     fallback.mkdir(parents=True, exist_ok=True)
     message = (
         f"WARNING: /data is not writable. Falling back to {fallback}; "

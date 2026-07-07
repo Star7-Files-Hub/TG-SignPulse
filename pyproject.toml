@@ -3,9 +3,9 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tg-signer"
+name = "tg-assistant"
 dynamic = ["version"]
-description = "AI Vibe Coding learning project - full-stack tech demo (Vue 3 + FastAPI + APScheduler + OpenAI SDK). Archived, no longer maintained."
+description = "TG-Assistant - Telegram multi-functional automation helper (check-in, forwarding, red packet, Emby keep-alive)"
 authors = [
     { name = "Amchii", email = "finethankuandyou@gmail.com" }
 ]
@@ -55,11 +55,11 @@ postgresql = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/amchii/tg-signer"
-Repository = "https://github.com/amchii/tg-signer"
+Homepage = "https://github.com/amchii/tg-assistant"
+Repository = "https://github.com/amchii/tg-assistant"
 
 [project.scripts]
-tg-signer = "tg_signer.__main__:signer"
+tg-assistant = "tg_signer.__main__:signer"
 
 [tool.setuptools]
 include-package-data = true

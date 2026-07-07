@@ -48,7 +48,7 @@ const rpAutoReplyText = ref('')
 const rpExcludeKeywordsText = ref('')
 
 const refresh = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   allMonitors.value = await listMonitors(token)
   forwardMonitors.value = allMonitors.value.filter(m => m.action === 'forward')
   redPacketMonitors.value = allMonitors.value.filter(m => m.action.startsWith('red_packet'))
@@ -72,7 +72,7 @@ const openForwardEdit = (m: any) => {
   showForwardModal.value = true
 }
 const saveForward = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   formLoading.value = true; formError.value = ''
   try {
     const fwTargets = (forwardForm.value.forward_targets || []).filter((t: any) => t.account && t.forward_chat_id)
@@ -123,7 +123,7 @@ const openRedPacketEdit = (m: any) => {
   showRedPacketModal.value = true
 }
 const saveRedPacket = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   formLoading.value = true; formError.value = ''
   try {
     const chatIds = rpChatIdsText.value.split('\n').map(s => Number(s.trim())).filter(n => n !== 0 && !isNaN(n))
@@ -156,13 +156,13 @@ const saveRedPacket = async () => {
 
 const handleDelete = async (m: any) => {
   if (!confirm(`删除监听器 ${m.name || m.id}？`)) return
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   await deleteMonitor(token, m.id)
   await refresh()
 }
 
 const toggleEnabled = async (m: any) => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   await toggleMonitor(token, m.id)
   await refresh()
 }
@@ -193,7 +193,7 @@ const cleanupTimers = () => {
 // 轮询拉取
 const fetchPollLogs = async () => {
   try {
-    const token = localStorage.getItem('tg-signer-token') || ''
+    const token = localStorage.getItem('tg-assistant-token') || ''
     const baseUrl = import.meta.env.VITE_API_BASE || '/api'
     const params = new URLSearchParams({ limit: '30' })
     if (sseCursor.value > 0) params.set('since', String(sseCursor.value))
@@ -235,7 +235,7 @@ const startPolling = () => {
 }
 
 const connectSSE = () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   if (!token) return
 
   cleanupTimers()
@@ -289,7 +289,7 @@ const connectSSE = () => {
 
 onMounted(async () => {
   // 原有的加载逻辑
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   try {
     allMonitors.value = await listMonitors(token)
     forwardMonitors.value = allMonitors.value.filter(m => m.action === 'forward')

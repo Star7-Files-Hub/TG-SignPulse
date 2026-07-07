@@ -30,16 +30,16 @@ A multi-functional Telegram automation helper — check-in, forwarding, red pack
 ## 🚀 Quick Deploy
 
 ```bash
-mkdir -p /root/tg-signpulse
-tar -xzf tg-signpulse.tar.gz -C /root/tg-signpulse
-cd /root/tg-signpulse
+mkdir -p /root/tg-assistant
+tar -xzf tg-assistant.tar.gz -C /root/tg-assistant
+cd /root/tg-assistant
 chmod +x deploy.sh
 sudo ./deploy.sh
 ```
 
 Admin password:
 ```bash
-cat /data/tg-signpulse/.admin_bootstrap_password
+cat /data/tg-assistant/.admin_bootstrap_password
 ```
 
 ## 📄 License

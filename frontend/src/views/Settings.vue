@@ -61,7 +61,7 @@ const showToast = (msg: string) => {
 }
 
 onMounted(async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   if (!token) return
 
   try {
@@ -100,7 +100,7 @@ onMounted(async () => {
 })
 
 const saveSettings = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   if (!token) return
 
   loading.value = true
@@ -125,7 +125,7 @@ const saveSettings = async () => {
 const botLoading = ref(false)
 
 const saveBotSettings = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   if (!token) return
 
   botLoading.value = true
@@ -147,7 +147,7 @@ const saveBotSettings = async () => {
 }
 
 const saveTgConfig = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   tgLoading.value = true
   try {
     await saveTelegramConfig(token, { api_id: tgConfig.value.api_id, api_hash: tgConfig.value.api_hash })
@@ -160,7 +160,7 @@ const saveTgConfig = async () => {
 }
 
 const resetTgConfig = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   if (!confirm(t('settings.resetConfirm'))) return
   tgLoading.value = true
   try {
@@ -176,7 +176,7 @@ const resetTgConfig = async () => {
 }
 
 const saveAiConfig = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   aiLoading.value = true
   try {
     await saveAIConfig(token, {
@@ -193,7 +193,7 @@ const saveAiConfig = async () => {
 }
 
 const testAi = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   aiLoading.value = true
   try {
     const res = await testAIConnection(token)
@@ -206,7 +206,7 @@ const testAi = async () => {
 }
 
 const handleExport = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   dataLoading.value = true
   try {
     const jsonStr = await exportAllConfigs(token)
@@ -214,7 +214,7 @@ const handleExport = async () => {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `tg-signpulse-export-${new Date().toISOString().split('T')[0]}.json`
+    a.download = `tg-assistant-export-${new Date().toISOString().split('T')[0]}.json`
     document.body.appendChild(a)
     a.click()
     a.remove()
@@ -234,7 +234,7 @@ const handleImport = async (e: Event) => {
   const reader = new FileReader()
   reader.onload = async (ev) => {
     const jsonStr = ev.target?.result as string
-    const token = localStorage.getItem('tg-signer-token') || ''
+    const token = localStorage.getItem('tg-assistant-token') || ''
     dataLoading.value = true
     try {
       await importAllConfigs(token, jsonStr, true)

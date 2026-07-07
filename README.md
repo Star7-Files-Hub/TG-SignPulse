@@ -40,24 +40,24 @@ Telegram 多功能自动化助手 — 签到、转发、抢红包、Emby 保号�
 
 ```bash
 # 1. 上传并解压
-mkdir -p /root/tg-signpulse
-tar -xzf tg-signpulse.tar.gz -C /root/tg-signpulse
+mkdir -p /root/tg-assistant
+tar -xzf tg-assistant.tar.gz -C /root/tg-assistant
 
 # 2. 运行部署脚本
-cd /root/tg-signpulse
+cd /root/tg-assistant
 chmod +x deploy.sh
 sudo ./deploy.sh
 ```
 
 访问 `http://服务器IP:8080`，管理员密码：
 ```bash
-cat /data/tg-signpulse/.admin_bootstrap_password
+cat /data/tg-assistant/.admin_bootstrap_password
 ```
 
 ### 使用 PostgreSQL
 
 ```bash
-export DATABASE_URL="postgresql://user:password@localhost:5432/tg_signpulse"
+export DATABASE_URL="postgresql://user:password@localhost:5432/tg_assistant"
 sudo -E ./deploy.sh
 ```
 
@@ -66,10 +66,10 @@ sudo -E ./deploy.sh
 Settings → AI 模型配置，或：
 
 ```bash
-echo 'OPENAI_API_KEY=sk-xxx' >> /opt/tg-signpulse/.env
-echo 'OPENAI_BASE_URL=https://api.openai.com/v1' >> /opt/tg-signpulse/.env
-echo 'OPENAI_MODEL=gpt-4o' >> /opt/tg-signpulse/.env
-systemctl restart tg-signpulse
+echo 'OPENAI_API_KEY=sk-xxx' >> /opt/tg-assistant/.env
+echo 'OPENAI_BASE_URL=https://api.openai.com/v1' >> /opt/tg-assistant/.env
+echo 'OPENAI_MODEL=gpt-4o' >> /opt/tg-assistant/.env
+systemctl restart tg-assistant
 ```
 
 ### 配置 Emby 保号
@@ -81,18 +81,18 @@ Emby 保号页 → 添加任务 → 填写 Emby 服务器地址、用户名密�
 ### 常用命令
 
 ```bash
-systemctl start tg-signpulse     # 启动
-systemctl stop tg-signpulse      # 停止
-systemctl restart tg-signpulse   # 重启
-systemctl status tg-signpulse    # 状态
-journalctl -u tg-signpulse -f    # 实时日志
+systemctl start tg-assistant     # 启动
+systemctl stop tg-assistant      # 停止
+systemctl restart tg-assistant   # 重启
+systemctl status tg-assistant    # 状态
+journalctl -u tg-assistant -f    # 实时日志
 ```
 
 ### 更新后重新构建
 
 ```bash
-cd /opt/tg-signpulse
-systemctl restart tg-signpulse
+cd /opt/tg-assistant
+systemctl restart tg-assistant
 
 # 前端需重新构建
 cd frontend && npm install && npx vite build && cp -r dist/* /web/

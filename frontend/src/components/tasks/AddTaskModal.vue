@@ -24,7 +24,7 @@ watch(() => props.isOpen, (val) => {
 })
 
 const handleSave = async () => {
-  const token = localStorage.getItem('tg-signer-token')
+  const token = localStorage.getItem('tg-assistant-token')
   if (!token) return
 
   loading.value = true

@@ -43,7 +43,7 @@ const showAccountPicker = ref<string | null>(null)
 const runAllLoading = ref(false)
 
 const loadAllAccounts = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   if (!token) return
   try {
     const res = await listAccounts(token)
@@ -81,7 +81,7 @@ const getTaskAccountName = (task: any): string => {
 }
 
 const loadTasks = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   if (!token) return
 
   pageLoading.value = true
@@ -169,14 +169,14 @@ onMounted(async () => {
   loadAllAccounts()
   // 获取时区
   try {
-    const token = localStorage.getItem('tg-signer-token') || ''
+    const token = localStorage.getItem('tg-assistant-token') || ''
     const res = await getGlobalSettings(token)
     if (res.timezone) appTimezone.value = res.timezone
   } catch { }
 })
 
 const loadChatAvatar = async (task: any, accountName: string, chatId: number) => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   // Use chat_id as cache key - avatar is the same regardless of which account fetched it
   const cacheKey = `chat_avatar_${chatId}`
   const avatarMapKey = `chat_${chatId}`
@@ -248,7 +248,7 @@ watch(() => route.query.account, () => {
 const toggleAccount = async (task: any, account: string) => {
   const checked = task.accountNames.includes(account)
   const newVal = !checked
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   try {
     const baseUrl = import.meta.env.VITE_API_BASE || '/api'
     await fetch(`${baseUrl}/sign-tasks/${encodeURIComponent(task.name)}/account-toggle`, {
@@ -268,7 +268,7 @@ const toggleAccount = async (task: any, account: string) => {
 
 const handleDelete = async (task: any) => {
   if (!confirm(`${t('tasks.deleteConfirm')} ${task.name} ?`)) return
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   try {
     await deleteSignTask(token, task.name)  // 不传 accountName，删除所有账号下的副本
     await loadTasks()
@@ -300,7 +300,7 @@ const handleRun = (task: any) => {
 
 const doRun = async (task: any, accountName: string) => {
   runMenuTask.value = null
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   try {
     await startSignTaskRun(token, task.name, accountName)
     // Open logs modal with the specific account that was just run
@@ -328,7 +328,7 @@ const openLogs = (task: any) => {
 }
 
 const runAllTasks = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   const runnable = tasks.value.filter((t: any) => 
     t.raw.enabled !== false && t.raw.execution_mode !== 'listen'
   )
@@ -359,7 +359,7 @@ const runAllTasks = async () => {
 }
 
 const toggleTaskEnabled = async (task: any) => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   try {
     const result = await toggleSignTask(token, task.name)
     task.raw.enabled = result.enabled

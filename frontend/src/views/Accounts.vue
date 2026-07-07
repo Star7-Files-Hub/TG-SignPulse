@@ -19,7 +19,7 @@ const initialAccountName = ref('')
 const editingAccount = ref<any>(null)
 
 const loadAccounts = async () => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   if (!token) return
 
   try {
@@ -67,7 +67,7 @@ const loadAccounts = async () => {
 const loadAvatar = async (acc: any) => {
   if (acc._avatarLoading) return
   acc._avatarLoading = true
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   try {
     const res = await fetch(`/api/accounts/${encodeURIComponent(acc.name)}/avatar`, {
       headers: { Authorization: `Bearer ${token}` }
@@ -89,7 +89,7 @@ onMounted(() => {
 
 const handleDelete = async (name: string) => {
   if (!confirm(`${t('accounts.deleteConfirm')} ${name} ?`)) return
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   try {
     await deleteAccount(token, name)
     await loadAccounts()
@@ -101,7 +101,7 @@ const handleDelete = async (name: string) => {
 const checkingAccount = ref('')
 
 const handleCheck = async (name: string) => {
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   checkingAccount.value = name
   try {
     const res = await checkAccountsStatus(token, { account_names: [name] })

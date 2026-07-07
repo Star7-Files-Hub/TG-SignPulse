@@ -1,7 +1,15 @@
-const TOKEN_KEY = "tg-signer-token";
+const TOKEN_KEY = "tg-assistant-token";
+const LEGACY_TOKEN_KEY = "tg-signer-token";
 
 export const getToken = (): string | null => {
   if (typeof window === "undefined") return null;
+  // Migration: check old key and migrate to new key
+  const legacyToken = localStorage.getItem(LEGACY_TOKEN_KEY);
+  if (legacyToken) {
+    localStorage.setItem(TOKEN_KEY, legacyToken);
+    localStorage.removeItem(LEGACY_TOKEN_KEY);
+    return legacyToken;
+  }
   return localStorage.getItem(TOKEN_KEY);
 };
 

@@ -42,7 +42,7 @@ const getTaskAccountName = (task: any): string => {
 const loadLogs = async () => {
   if (!props.task) return
   loading.value = true
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   try {
     // If running a specific account, get its history; otherwise aggregate
     const accountName = props.runAccount || getTaskAccountName(props.task) || undefined
@@ -58,7 +58,7 @@ const loadLogs = async () => {
 
 const connectWebSocket = () => {
   if (!props.task) return
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   const taskName = encodeURIComponent(props.task.name)
   const accountName = getTaskAccountName(props.task) || ''
   const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -120,7 +120,7 @@ const startPolling = () => {
   if (pollTimer) return
   pollTimer = setInterval(async () => {
     if (!props.task) return
-    const token = localStorage.getItem('tg-signer-token') || ''
+    const token = localStorage.getItem('tg-assistant-token') || ''
     const accountName = getTaskAccountName(props.task) || ''
     try {
       const res = await fetch(`/api/sign-tasks/${encodeURIComponent(props.task.name)}/logs?account_name=${encodeURIComponent(accountName)}`, {
@@ -169,7 +169,7 @@ watch(() => props.isOpen, async (newVal) => {
   if (newVal) {
     // 获取时区设置
     try {
-      const token = localStorage.getItem('tg-signer-token') || ''
+      const token = localStorage.getItem('tg-assistant-token') || ''
       const res = await getGlobalSettings(token)
       if (res.timezone) logTimezone.value = res.timezone
     } catch { }

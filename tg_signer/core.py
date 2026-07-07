@@ -359,7 +359,7 @@ class Client(BaseClient):
         if _PYROGRAM_IMPORT_ERROR is not None:
             _raise_pyrogram_import_error()
         key = kwargs.pop("key", None)
-        self._tg_signpulse_no_updates = kwargs.get("no_updates")
+        self._tg_assistant_no_updates = kwargs.get("no_updates")
         super().__init__(name, *args, **kwargs)
         self.key = key or str(pathlib.Path(self.workdir).joinpath(self.name).resolve())
         if self.in_memory and not self.session_string:
@@ -542,7 +542,7 @@ def get_client(
     if key in _CLIENT_INSTANCES:
         existing = _CLIENT_INSTANCES[key]
         requested_no_updates = kwargs.get("no_updates")
-        existing_no_updates = getattr(existing, "_tg_signpulse_no_updates", None)
+        existing_no_updates = getattr(existing, "_tg_assistant_no_updates", None)
         refs = _CLIENT_REFS.get(key, 0)
         if (
             requested_no_updates is not None

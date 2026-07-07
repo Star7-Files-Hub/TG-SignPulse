@@ -60,7 +60,7 @@ const actions = ref<any[]>([{ id: Date.now(), type: 'send_text', value: '', aiPr
 // ============ 账号加载 ============
 const loadAccounts = async () => {
   try {
-    const token = localStorage.getItem('tg-signer-token') || ''
+    const token = localStorage.getItem('tg-assistant-token') || ''
     const res = await listAccounts(token)
     accounts.value = res.accounts || []
     if (props.initialTask) {
@@ -137,7 +137,7 @@ const loadChats = async (n: string, forceRefresh: boolean = false) => {
   loadChatsAbort = controller
   chatListRefreshing.value = true
   chatListError.value = ''
-  const token = localStorage.getItem('tg-signer-token') || ''
+  const token = localStorage.getItem('tg-assistant-token') || ''
   try {
     const result = await getAccountChats(token, n, forceRefresh)
     if (controller.signal.aborted) return
@@ -176,7 +176,7 @@ watch(chatSearch, (v) => {
   st = setTimeout(async () => {
     chatSearchLoading.value = true
     try {
-      const t = localStorage.getItem('tg-signer-token') || ''
+      const t = localStorage.getItem('tg-assistant-token') || ''
       const r = await searchAccountChats(t, editingAccount.value, v.trim())
       chatSearchResults.value = r.items || []
     } catch (e) { console.error(e) } finally { chatSearchLoading.value = false }
