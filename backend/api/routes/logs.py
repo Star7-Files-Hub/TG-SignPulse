@@ -274,9 +274,14 @@ def get_all_logs(
     logs_dir = settings.resolve_logs_dir()
     lines: list[dict] = []
 
-    # 解析一行日志：格式为 "LEVEL:message" 或 "timestamp LEVEL: ..."
+    # 解析一行日志。兼容多种格式：
+    #   "2024-01-01 12:34:56,789 INFO [module] message"
+    #   "2024-01-01T12:34:56.789 WARNING [module] message"
+    #   "2024-01-01 12:34:56 INFO [module] message"   (无毫秒)
+    #   "INFO [module] message"                        (无时间戳)
+    #   "ERROR:message"
     _log_pattern = re.compile(
-        r'^(?P<time>\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}[\.,]\d+)?\s*'
+        r'^(?P<time>\d{4}-\d{2}-\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:[\.,]\d+)?)?\s*'
         r'(?P<level>DEBUG|INFO|WARNING|ERROR|CRITICAL)?[\s:]*'
         r'(?P<module>\[[\w\.]+\])?\s*'
         r'(?P<message>.+)$'
@@ -319,11 +324,11 @@ def get_all_logs(
         except Exception:
             continue
 
-    # 按时间倒序（有时间的排前面），截取 limit
+    # 按时间倒序（有时间的排前面），截取最近 limit 条
     lines.sort(key=lambda x: str(x.get("time") or ""), reverse=True)
-    lines = lines[-limit:] if len(lines) > limit else lines
+    lines = lines[:limit]
 
     return {
         "total": len(lines),
-        "logs": [AllLogItem(**item) for item in lines[-limit:]],
+        "logs": [AllLogItem(**item) for item in lines],
     }

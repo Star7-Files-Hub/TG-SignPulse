@@ -795,10 +795,10 @@ async def get_chat_avatar(
     # Legacy account-specific cache files (for backward compatibility)
     legacy_cache_file = avatar_cache_dir / f"{account_name}_{chat_id}.jpg"
 
-    # If no-avatar marker is recent (7 days), return 404
+    # If no-avatar marker is recent (1 hour), return 404
     if no_avatar_marker.exists():
         age = time.time() - no_avatar_marker.stat().st_mtime
-        if age < 604800:
+        if age < 3600:
             raise HTTPException(status_code=404, detail="No avatar available")
         else:
             no_avatar_marker.unlink(missing_ok=True)

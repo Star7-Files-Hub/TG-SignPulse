@@ -374,6 +374,7 @@ class GlobalSettingsRequest(BaseModel):
     telegram_bot_chat_id: Optional[str] = None
     telegram_bot_message_thread_id: Optional[int] = None
     telegram_bot_red_packet_notify_enabled: bool = False
+    auto_block_private_chat: bool = False
     timezone: Optional[str] = None
 
 
@@ -390,6 +391,7 @@ class GlobalSettingsResponse(BaseModel):
     telegram_bot_chat_id: Optional[str] = None
     telegram_bot_message_thread_id: Optional[int] = None
     telegram_bot_red_packet_notify_enabled: bool = False
+    auto_block_private_chat: bool = False
     timezone: str = "Asia/Shanghai"
 
 
@@ -425,6 +427,7 @@ async def save_global_settings(
             "telegram_bot_chat_id": request.telegram_bot_chat_id,
             "telegram_bot_message_thread_id": request.telegram_bot_message_thread_id,
             "telegram_bot_red_packet_notify_enabled": request.telegram_bot_red_packet_notify_enabled,
+            "auto_block_private_chat": request.auto_block_private_chat,
             "timezone": request.timezone or get_settings().timezone,
         }
         if hasattr(request, "model_fields_set"):

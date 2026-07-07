@@ -267,6 +267,12 @@ async def sync_jobs() -> None:
     finally:
         db.close()
 
+    # 3. 同步 Emby 保号任务
+    try:
+        await schedule_emby_jobs()
+    except Exception as e:
+        print(f"Error scheduling emby jobs: {e}")
+
 
 async def init_scheduler(sync_on_startup: bool = True) -> AsyncIOScheduler:
     global scheduler

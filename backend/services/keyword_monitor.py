@@ -721,6 +721,7 @@ class KeywordMonitorService:
         return f"动作 {action_id}"
 
     def _rules_key(self, rules: list[KeywordMonitorRule]) -> str:
+        """生成规则指纹，纳入 keywords、chat_ids 和 excluded_chat_ids 确保规则内容变更触发监听器重启"""
         return repr(
             [
                 {
@@ -729,8 +730,11 @@ class KeywordMonitorService:
                     "chat_id": rule.chat_id,
                     "message_thread_id": rule.message_thread_id,
                     "action": rule.action,
+                    "keywords": sorted(rule.action.get("keywords", [])),
+                    "chat_ids": sorted(rule.action.get("chat_ids", [])),
+                    "excluded_chat_ids": sorted(rule.action.get("excluded_chat_ids", [])),
                 }
-                for rule in rules
+                for rule in sorted(rules, key=lambda r: (r.account_name, r.task_name))
             ]
         )
 
@@ -773,6 +777,7 @@ class KeywordMonitorService:
                     action_dict["smart_dedup"] = m.get("smart_dedup", False)
                     action_dict["forward_with_button"] = m.get("forward_with_button", False)
                     action_dict["smart_dedup_pattern"] = m.get("smart_dedup_pattern")
+                    action_dict["excluded_chat_ids"] = [int(c) for c in m.get("excluded_chat_ids", []) if c is not None]
                     # 转发模式：chat_id=0 表示监听全部群聊/频道
                     if action_type == "forward":
                         action_dict["push_channel"] = "forward"
@@ -827,6 +832,8 @@ class KeywordMonitorService:
                             action_dict["auto_reply_list"] = list(m["auto_reply_list"])
                         if m.get("auto_reply_delay"):
                             action_dict["auto_reply_delay"] = m["auto_reply_delay"]
+                        if m.get("exclude_keywords"):
+                            action_dict["exclude_keywords"] = list(m["exclude_keywords"])
                         if action_type == "red_packet_keyword":
                             tmpl = m.get("grab_text_template", "/grab {number}")
                             action_dict["continue_actions"] = [{"action": 1, "text": tmpl}]
@@ -890,6 +897,12 @@ class KeywordMonitorService:
         # 红包模式且未配置关键词
         if not keywords and action.get("red_packet_mode"):
             rp_mode = action["red_packet_mode"]
+            # 先检查排除关键词：如果消息中包含任意排除关键词，跳过
+            exclude_keywords = action.get("exclude_keywords") or []
+            if exclude_keywords and text:
+                for ek in exclude_keywords:
+                    if ek and ek in text:
+                        return None
             # button 模式：扫描所有消息找红包按钮
             if rp_mode == "button":
                 return "*"
@@ -1674,38 +1687,7 @@ class KeywordMonitorService:
                     f"后续动作 {index}/{len(rendered_actions)} 执行成功：{action_desc}",
                 )
                 self._append_rule_log(rule, "关键词命中后续动作全部执行完成")
-            await self._notify_red_packet_grab(rule=rule, message=message, chat_title="")
 
-    async def _notify_red_packet_grab(
-        self, *, rule: KeywordMonitorRule, message: Message, chat_title: str = ""
-    ) -> None:
-        """抢到红包后发送 Telegram Bot 通知"""
-        try:
-            from backend.services.config import get_config_service
-            gs = get_config_service().get_global_settings()
-            if not gs.get("telegram_bot_red_packet_notify_enabled"):
-                return
-            bot_token = gs.get("telegram_bot_token")
-            bot_chat_id = gs.get("telegram_bot_chat_id")
-            if not bot_token or not bot_chat_id:
-                return
-            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            title = chat_title or str(getattr(message.chat, 'title', message.chat.id))
-            text = (
-                f"🧧 抢到红包！\n"
-                f"群组: {title}\n"
-                f"时间: {now_str}\n"
-                f"关键词: {', '.join(rule.action.get('keywords', [])[:3]) or '全部'}"
-            )
-            from backend.services.push_notifications import send_telegram_bot_message
-            await send_telegram_bot_message(
-                bot_token=bot_token,
-                chat_id=str(bot_chat_id),
-                text=text,
-                message_thread_id=gs.get("telegram_bot_message_thread_id"),
-            )
-        except Exception:
-            pass
 
     async def _notify_forward_success(
         self,
@@ -1834,6 +1816,7 @@ class KeywordMonitorService:
                 for rule in self._rules
                 if rule.account_name == account_name
                 and (rule.chat_id == 0 or rule.chat_id == message.chat.id)
+                and message.chat.id not in rule.action.get("excluded_chat_ids", [])
             ]
             if not same_chat_rules:
                 return
@@ -1955,21 +1938,22 @@ class KeywordMonitorService:
                         account_name, forward_chat_id, getattr(message.chat, 'id', ''), message.id, len(text or ""),
                     )
                     try:
-                        # === 两级去重：完全匹配 + 模糊匹配 ===
+                        # === 多级去重：消息ID + 完全匹配 + 模糊匹配 + 智能数值 ===
+                        # 重要：去重状态仅在转发成功后写入，避免被拦截的消息污染缓存
                         monitor_id = rule.task_name.replace("monitor:", "")
                         dedup_seconds = int(rule.action.get("dedup_seconds", 60) or 0)
                         now = time.time()
-                        forwarded = False
+                        _dedup_pending = None  # 延迟更新的去重状态
 
                         if dedup_seconds > 0:
                             normalized_text = text.strip()
 
-                            # Level 1: 消息ID去重（同一消息不重复转发）
+                            # Level 1: 消息ID去重（同一消息在冷却期内不重复转发）
                             dedup_key = f"{rule.task_name}:{message.chat.id}:{message.id}"
                             if dedup_key in self._forwarded_cache:
                                 if now - self._forwarded_cache[dedup_key] < dedup_seconds:
                                     continue
-                            self._forwarded_cache[dedup_key] = now
+                            # 注意：不在此处更新时间戳，延迟到转发成功后
 
                             # Level 2: 完全匹配 — 与上一条转发内容完全一致则拦掉
                             last_text = self._last_forwarded_text.get(monitor_id, "")
@@ -1980,11 +1964,13 @@ class KeywordMonitorService:
                             # Level 3: 模糊匹配 — 冷却时间内相似度 ≥ 阈值则拦掉
                             fuzzy_threshold = float(rule.action.get("fuzzy_threshold", 0.85) or 0)
                             fuzzy_cooldown = int(rule.action.get("fuzzy_cooldown_minutes", 5) or 0) * 60
+                            _fuzzy_text_hash = None
                             if fuzzy_threshold > 0 and fuzzy_cooldown > 0 and normalized_text:
-                                text_hash = hashlib.md5(normalized_text.encode()).hexdigest()
+                                _fuzzy_text_hash = hashlib.md5(normalized_text.encode()).hexdigest()
                                 cache = self._fuzzy_dedup_cache.setdefault(monitor_id, [])
                                 # 清理过期
                                 cache[:] = [(h, t) for h, t in cache if now - t < fuzzy_cooldown]
+                                _dedup_blocked = False
                                 for cached_hash, cached_time in cache:
                                     cached_text = self._last_forwarded_text.get(f"{monitor_id}:hash:{cached_hash}", "")
                                     if cached_text:
@@ -1992,34 +1978,37 @@ class KeywordMonitorService:
                                         if ratio >= fuzzy_threshold:
                                             remain = int(fuzzy_cooldown - (now - cached_time))
                                             self._append_rule_log(rule, f"去重（模糊匹配）：相似度 {ratio:.2f} ≥ {fuzzy_threshold}，冷却剩余 {remain}s，已拦截")
-                                            forwarded = True
+                                            _dedup_blocked = True
                                             break
-                                if forwarded:
+                                if _dedup_blocked:
                                     continue
-                                # 记录本次
-                                cache.append((text_hash, now))
-                                if len(cache) > 20:
-                                    cache.pop(0)
-                                self._last_forwarded_text[f"{monitor_id}:hash:{text_hash}"] = normalized_text
+                                # 注意：不在此处记录 hash，延迟到转发成功后
 
                             # Level 4: 智能去重 — 提取数值比对，数值不变不转发
                             smart_dedup = rule.action.get("smart_dedup", False)
+                            _smart_sig = None
                             if smart_dedup and normalized_text:
                                 pattern = rule.action.get("smart_dedup_pattern") or r'\d+'
                                 nums = re.findall(pattern, normalized_text)
-                                sig = '|'.join(nums) if nums else ''
+                                _smart_sig = '|'.join(nums) if nums else ''
                                 last_sig = self._smart_dedup_last.get(monitor_id, '')
-                                if sig and sig == last_sig:
-                                    self._append_rule_log(rule, f"去重（智能数值）：数值签名 [{sig}] 未变化，已拦截")
+                                if _smart_sig and _smart_sig == last_sig:
+                                    self._append_rule_log(rule, f"去重（智能数值）：数值签名 [{_smart_sig}] 未变化，已拦截")
                                     continue
-                                if sig:
-                                    self._smart_dedup_last[monitor_id] = sig
-                                    self._append_rule_log(rule, f"智能去重：数值签名 [{sig}]" + (f" (前次: [{last_sig}])" if last_sig else " (首次)"))
+                                # 注意：不在此处更新签名，延迟到转发成功后
+                                if _smart_sig:
+                                    self._append_rule_log(rule, f"智能去重：数值签名 [{_smart_sig}]" + (f" (前次: [{last_sig}])" if last_sig else " (首次)"))
 
-                            # 记录最后转发的文本
-                            self._last_forwarded_text[monitor_id] = normalized_text
+                            # 去重全部通过，准备延迟更新的状态（转发成功后写入）
+                            _dedup_pending = {
+                                "dedup_key": dedup_key,
+                                "monitor_id": monitor_id,
+                                "normalized_text": normalized_text,
+                                "fuzzy_text_hash": _fuzzy_text_hash,
+                                "smart_sig": _smart_sig,
+                            }
 
-                            # 定期清理
+                            # 定期清理过期缓存
                             self._forwarded_cache = {
                                 k: v for k, v in self._forwarded_cache.items()
                                 if now - v < max(dedup_seconds * 2, 120)
@@ -2138,6 +2127,20 @@ class KeywordMonitorService:
                             account_name, raw_chat_id, forward_chat_id, msg_link,
                         )
 
+                        # 去重状态更新：仅在转发成功后写入，避免被拦截的消息污染缓存
+                        if _dedup_pending:
+                            _now_ts = time.time()
+                            self._forwarded_cache[_dedup_pending["dedup_key"]] = _now_ts
+                            self._last_forwarded_text[_dedup_pending["monitor_id"]] = _dedup_pending["normalized_text"]
+                            if _dedup_pending["fuzzy_text_hash"]:
+                                _fcache = self._fuzzy_dedup_cache.setdefault(_dedup_pending["monitor_id"], [])
+                                _fcache.append((_dedup_pending["fuzzy_text_hash"], _now_ts))
+                                if len(_fcache) > 20:
+                                    _fcache.pop(0)
+                                self._last_forwarded_text[f"{_dedup_pending['monitor_id']}:hash:{_dedup_pending['fuzzy_text_hash']}"] = _dedup_pending["normalized_text"]
+                            if _dedup_pending["smart_sig"]:
+                                self._smart_dedup_last[_dedup_pending["monitor_id"]] = _dedup_pending["smart_sig"]
+
                         # ── Bot 通知 ──
                         await self._notify_forward_success(
                             rule=rule,
@@ -2233,7 +2236,6 @@ class KeywordMonitorService:
                             message=message,
                         )
                         if clicked:
-                            await self._notify_red_packet_grab(rule=rule, message=message, chat_title=chat_title)
                             # 发送随机回复
                             if variables.get("random_reply"):
                                 reply_delay = float(rule.action.get("auto_reply_delay") or 0)
@@ -2415,6 +2417,30 @@ class KeywordMonitorService:
                     )
 
                     self._handler_refs.append((account_name, client, handler_ref))
+
+                    # 私聊自动拉黑 handler
+                    async def auto_block_handler(_client, message: Message, name: str = account_name):
+                        try:
+                            from backend.services.config import get_config_service
+                            settings = get_config_service().get_global_settings()
+                            if not settings.get("auto_block_private_chat", False):
+                                return
+                            await _client.block_user(message.chat.id)
+                            logger.info(
+                                "Auto-blocked private chat user %s for account %s",
+                                message.chat.id, name,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Auto-block failed for user %s on account %s: %s",
+                                message.chat.id, name, exc,
+                            )
+
+                    block_handler_ref = client.add_handler(
+                        MessageHandler(auto_block_handler, filters.private & (filters.text | filters.caption))
+                    )
+                    self._handler_refs.append((account_name, client, block_handler_ref))
+
                     started_accounts.add(account_name)
                     logger.info(
                         "Keyword monitor started for %s in %s", account_name, chat_ids

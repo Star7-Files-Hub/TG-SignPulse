@@ -506,6 +506,7 @@ export interface GlobalSettings {
   telegram_bot_token?: string | null;
   telegram_bot_chat_id?: string | null;
   telegram_bot_message_thread_id?: number | null;
+  auto_block_private_chat?: boolean;
   timezone?: string;
 }
 

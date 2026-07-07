@@ -31,17 +31,21 @@ const forwardForm = ref({
   smart_dedup: false, forward_with_button: false, smart_dedup_pattern: '', enabled: true,
 })
 const fwKeywordsText = ref('')
+const fwExcludedChatIdsText = ref('')
 
 // 红包表单
 const rpForm = ref({
   name: '', account_names: [] as string[], action: 'red_packet_button',
   match_mode: 'regex', extract_pattern: '', grab_text_template: '/grab {number}',
   red_packet_delay: 0, auto_reply_delay: 0, enabled: true,
+  exclude_keywords: [] as string[],
 })
 const rpKeywordsText = ref('')
 const rpChatIdsText = ref('')
+const rpExcludedChatIdsText = ref('')
 const rpButtonNamesText = ref('')
 const rpAutoReplyText = ref('')
+const rpExcludeKeywordsText = ref('')
 
 const refresh = async () => {
   const token = localStorage.getItem('tg-signer-token') || ''
@@ -55,6 +59,7 @@ const openForwardAdd = () => {
   editingMonitor.value = null
   forwardForm.value = { id: '', name: '', account_names: [], forward_targets: [], source_chat_id: null, keywords: [], match_mode: 'regex', forward_chat_id: null, dedup_seconds: 60, fuzzy_threshold: 0.85, fuzzy_cooldown_minutes: 5, smart_dedup: false, forward_with_button: false, smart_dedup_pattern: '', enabled: true }
   fwKeywordsText.value = ''
+  fwExcludedChatIdsText.value = ''
   formError.value = ''
   showForwardModal.value = true
 }
@@ -62,6 +67,7 @@ const openForwardEdit = (m: any) => {
   editingMonitor.value = m
   forwardForm.value = { ...m, dedup_seconds: m.dedup_seconds ?? 60, fuzzy_threshold: m.fuzzy_threshold ?? 0.85, fuzzy_cooldown_minutes: m.fuzzy_cooldown_minutes ?? 5, smart_dedup: m.smart_dedup ?? false, forward_with_button: m.forward_with_button ?? false, smart_dedup_pattern: m.smart_dedup_pattern || '', forward_targets: (m.forward_targets || []).map((t: any) => ({...t})) }
   fwKeywordsText.value = (m.keywords || []).join('\n')
+  fwExcludedChatIdsText.value = (m.excluded_chat_ids || []).join('\n')
   formError.value = ''
   showForwardModal.value = true
 }
@@ -70,6 +76,7 @@ const saveForward = async () => {
   formLoading.value = true; formError.value = ''
   try {
     const fwTargets = (forwardForm.value.forward_targets || []).filter((t: any) => t.account && t.forward_chat_id)
+    const excludedChatIds = fwExcludedChatIdsText.value.split('\n').map(s => Number(s.trim())).filter(n => n !== 0 && !isNaN(n))
     const data: any = {
       name: forwardForm.value.name,
       action: 'forward',
@@ -84,6 +91,7 @@ const saveForward = async () => {
       smart_dedup: forwardForm.value.smart_dedup,
       forward_with_button: forwardForm.value.forward_with_button,
       smart_dedup_pattern: forwardForm.value.smart_dedup_pattern || null,
+      excluded_chat_ids: excludedChatIds,
       enabled: forwardForm.value.enabled,
     }
     if (editingMonitor.value) await updateMonitor(token, editingMonitor.value.id, data)
@@ -97,18 +105,20 @@ const saveForward = async () => {
 // ---- 红包 ----
 const openRedPacketAdd = () => {
   editingMonitor.value = null
-  rpForm.value = { name: '', account_names: [], action: 'red_packet_button', match_mode: 'regex', extract_pattern: '', grab_text_template: '/grab {number}', red_packet_delay: 0, auto_reply_delay: 0, enabled: true }
-  rpKeywordsText.value = ''; rpChatIdsText.value = ''; rpButtonNamesText.value = ''; rpAutoReplyText.value = ''
+  rpForm.value = { name: '', account_names: [], action: 'red_packet_button', match_mode: 'regex', extract_pattern: '', grab_text_template: '/grab {number}', red_packet_delay: 0, auto_reply_delay: 0, enabled: true, exclude_keywords: [] }
+  rpKeywordsText.value = ''; rpChatIdsText.value = ''; rpExcludedChatIdsText.value = ''; rpButtonNamesText.value = ''; rpAutoReplyText.value = ''; rpExcludeKeywordsText.value = ''
   formError.value = ''
   showRedPacketModal.value = true
 }
 const openRedPacketEdit = (m: any) => {
   editingMonitor.value = m
-  rpForm.value = { name: m.name || '', account_names: m.account_names || [], action: m.action || 'red_packet_button', match_mode: m.match_mode || 'regex', extract_pattern: m.extract_pattern || '', grab_text_template: m.grab_text_template || '/grab {number}', red_packet_delay: m.red_packet_delay || 0, auto_reply_delay: m.auto_reply_delay || 0, enabled: m.enabled !== false }
+  rpForm.value = { name: m.name || '', account_names: m.account_names || [], action: m.action || 'red_packet_button', match_mode: m.match_mode || 'regex', extract_pattern: m.extract_pattern || '', grab_text_template: m.grab_text_template || '/grab {number}', red_packet_delay: m.red_packet_delay || 0, auto_reply_delay: m.auto_reply_delay || 0, enabled: m.enabled !== false, exclude_keywords: m.exclude_keywords || [] }
   rpKeywordsText.value = (m.keywords || []).join('\n')
   rpChatIdsText.value = (m.chat_ids || []).join('\n')
+  rpExcludedChatIdsText.value = (m.excluded_chat_ids || []).join('\n')
   rpButtonNamesText.value = (m.button_names || []).join('\n')
   rpAutoReplyText.value = (m.auto_reply_list || []).join('\n')
+  rpExcludeKeywordsText.value = (m.exclude_keywords || []).join('\n')
   formError.value = ''
   showRedPacketModal.value = true
 }
@@ -117,6 +127,7 @@ const saveRedPacket = async () => {
   formLoading.value = true; formError.value = ''
   try {
     const chatIds = rpChatIdsText.value.split('\n').map(s => Number(s.trim())).filter(n => n !== 0 && !isNaN(n))
+    const excludedChatIds = rpExcludedChatIdsText.value.split('\n').map(s => Number(s.trim())).filter(n => n !== 0 && !isNaN(n))
     const data: any = {
       name: rpForm.value.name,
       account_names: rpForm.value.account_names,
@@ -124,12 +135,14 @@ const saveRedPacket = async () => {
       match_mode: rpForm.value.match_mode,
       keywords: rpKeywordsText.value.split('\n').map(s => s.trim()).filter(Boolean),
       chat_ids: chatIds,
+      excluded_chat_ids: excludedChatIds,
       button_names: rpButtonNamesText.value.split('\n').map(s => s.trim()).filter(Boolean),
       extract_pattern: rpForm.value.extract_pattern || null,
       grab_text_template: rpForm.value.grab_text_template,
       red_packet_delay: rpForm.value.red_packet_delay || 0,
       auto_reply_list: rpAutoReplyText.value.split('\n').map(s => s.trim()).filter(Boolean),
       auto_reply_delay: rpForm.value.auto_reply_delay || 0,
+      exclude_keywords: rpExcludeKeywordsText.value.split('\n').map(s => s.trim()).filter(Boolean),
       enabled: rpForm.value.enabled !== false,
     }
     console.log('[saveRedPacket] chatIds raw:', rpChatIdsText.value, 'parsed:', chatIds, 'data:', JSON.stringify(data))
@@ -377,6 +390,7 @@ const formatEventData = (data: any) => {
                   <span>@{{ (m.account_names || []).join(', ') || '-' }}</span>
                   <span v-if="m.forward_chat_id" class="ml-2">→ {{ m.forward_chat_id }}</span>
                 </template>
+                <span v-if="(m.excluded_chat_ids || []).length" class="ml-2 text-rose-400">{{ (m.excluded_chat_ids || []).length }} excluded</span>
                 <span class="ml-2">{{ (m.keywords || []).slice(0, 3).join(', ') }}{{ (m.keywords || []).length > 3 ? '...' : '' }}</span>
               </div>
             </div>
@@ -415,10 +429,11 @@ const formatEventData = (data: any) => {
               </div>
               <div class="text-xs text-gray-400 mt-0.5">
                 <span>{{ m.chat_ids?.length || 0 }} chats</span>
+                <span v-if="(m.excluded_chat_ids || []).length" class="ml-2 text-rose-400">{{ (m.excluded_chat_ids || []).length }} excluded</span>
                 <span class="ml-2">@{{ (m.account_names || []).join(', ') || '-' }}</span>
               </div>
             </div>
-            <button @click="toggleEnabled(m)" class="p-1.5 text-xs" :class="m.enabled ? 'text-emerald-500' : 'text-gray-300'" :title="m.enabled ? '禁用' : '启用'">{{ m.enabled ? '●' : '○' }}</button>
+            <button @click="toggleEnabled(m)" class="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center text-sm rounded hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors" :class="m.enabled ? 'text-emerald-500' : 'text-gray-300'" :title="m.enabled ? '禁用' : '启用'">{{ m.enabled ? '●' : '○' }}</button>
             <button @click="openRedPacketEdit(m)" class="p-1.5 text-xs text-gray-400 hover:text-gray-900 dark:hover:text-gray-200">{{ t('common.edit') }}</button>
             <button @click="handleDelete(m)" class="p-1.5 text-gray-400 hover:text-rose-500"><Trash2 class="w-3.5 h-3.5" /></button>
           </div>
@@ -471,6 +486,10 @@ const formatEventData = (data: any) => {
         <div class="space-y-1.5">
           <label class="text-xs font-medium text-gray-500">{{ t('monitors.keywords') }}</label>
           <textarea v-model="fwKeywordsText" rows="3" :placeholder="t('monitors.keywordsPlaceholder')" class="w-full p-2 text-xs border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-sky-400 font-mono"></textarea>
+        </div>
+        <div class="space-y-1.5">
+          <label class="text-xs font-medium text-gray-500">{{ t('monitors.excludedChatIds') }}</label>
+          <textarea v-model="fwExcludedChatIdsText" rows="2" :placeholder="t('monitors.excludedChatIdsPlaceholder')" class="w-full p-2 text-xs border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-sky-400"></textarea>
         </div>
         <div class="grid grid-cols-2 gap-4">
           <div class="space-y-1.5">
@@ -542,6 +561,10 @@ const formatEventData = (data: any) => {
           <label class="text-xs font-medium text-gray-500">{{ t('monitors.chatIds') }} <span class="text-rose-500">*</span></label>
           <textarea v-model="rpChatIdsText" rows="2" :placeholder="t('monitors.chatIdsPlaceholder')" class="w-full p-2 text-xs border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-rose-400"></textarea>
         </div>
+        <div class="space-y-1.5">
+          <label class="text-xs font-medium text-gray-500">{{ t('monitors.excludedChatIds') }}</label>
+          <textarea v-model="rpExcludedChatIdsText" rows="2" :placeholder="t('monitors.excludedChatIdsPlaceholder')" class="w-full p-2 text-xs border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-rose-400"></textarea>
+        </div>
         <div class="grid grid-cols-2 gap-4">
           <div class="space-y-1.5">
             <label class="text-xs font-medium text-gray-500">{{ t('monitors.action') }}</label>
@@ -582,6 +605,10 @@ const formatEventData = (data: any) => {
             <label class="text-xs font-medium text-gray-500">{{ t('monitors.replyDelay') }}</label>
             <input v-model.number="rpForm.auto_reply_delay" type="number" min="0" step="0.1" placeholder="0" class="w-full h-10 px-3 text-sm border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 outline-none focus:border-rose-400" />
           </div>
+        </div>
+        <div class="space-y-1.5">
+          <label class="text-xs font-medium text-gray-500">{{ t('monitors.excludeKeywords') }}</label>
+          <textarea v-model="rpExcludeKeywordsText" rows="2" :placeholder="t('monitors.excludeKeywordsPlaceholder')" class="w-full p-2 text-xs border border-gray-200 dark:border-gray-800/60 bg-white dark:bg-gray-900 outline-none focus:border-rose-400"></textarea>
         </div>
       </div>
       <template #footer>

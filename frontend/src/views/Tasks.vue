@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, onBeforeUnmount, watch, reactive } from 'vue'
 import { useRoute } from 'vue-router'
 import { Play, FileText, Edit2, Trash2, Plus, Radio, Clock, Shuffle, Power, Zap } from 'lucide-vue-next'
 import { listSignTasks, deleteSignTask, startSignTaskRun, toggleSignTask, listAccounts, getGlobalSettings } from '../lib/api' 
@@ -18,6 +18,20 @@ const showEditModal = ref(false)
 const showLogsModal = ref(false)
 const editingTask = ref<any>(null)
 const logsTask = ref<any>(null)
+
+// 机器人头像缓存：key=chat_{chatId}，存储 blob URL（用于响应式渲染，避免直接赋值 task.chatAvatarUrl 导致 Vue 无法追踪）
+const chatAvatarUrls = reactive(new Map<string, string>())
+function getChatAvatarUrl(task: any): string {
+  return task._avatarKey ? (chatAvatarUrls.get(task._avatarKey) || '') : ''
+}
+
+onBeforeUnmount(() => {
+  // 清理所有 blob URL，避免内存泄漏
+  for (const url of chatAvatarUrls.values()) {
+    if (url.startsWith('blob:')) URL.revokeObjectURL(url)
+  }
+  chatAvatarUrls.clear()
+})
 const logsRunAccount = ref<string>('')  // Account that just executed the task
 
 // Account selection for run
@@ -165,12 +179,19 @@ const loadChatAvatar = async (task: any, accountName: string, chatId: number) =>
   const token = localStorage.getItem('tg-signer-token') || ''
   // Use chat_id as cache key - avatar is the same regardless of which account fetched it
   const cacheKey = `chat_avatar_${chatId}`
+  const avatarMapKey = `chat_${chatId}`
   const noAvatarKey = `chat_avatar_${chatId}_404`
+  
+  // Bind avatarMapKey to task for reactive template lookup
+  task._avatarKey = avatarMapKey
   
   // Check localStorage cache first (persists across browser sessions)
   const cached = localStorage.getItem(cacheKey)
   if (cached && cached !== '__no_avatar__') {
-    task.chatAvatarUrl = cached
+    // Revoke old blob URL if any
+    const oldUrl = chatAvatarUrls.get(avatarMapKey)
+    if (oldUrl?.startsWith('blob:')) URL.revokeObjectURL(oldUrl)
+    chatAvatarUrls.set(avatarMapKey, cached)
     return
   }
 
@@ -190,7 +211,10 @@ const loadChatAvatar = async (task: any, accountName: string, chatId: number) =>
     if (res.ok) {
       const blob = await res.blob()
       const url = URL.createObjectURL(blob)
-      task.chatAvatarUrl = url
+      // Revoke old blob URL before setting new one
+      const oldUrl = chatAvatarUrls.get(avatarMapKey)
+      if (oldUrl?.startsWith('blob:')) URL.revokeObjectURL(oldUrl)
+      chatAvatarUrls.set(avatarMapKey, url)
       // Clear no-avatar marker
       localStorage.removeItem(noAvatarKey)
       // Cache as data URL for persistence
@@ -386,7 +410,7 @@ const toggleTaskEnabled = async (task: any) => {
         
         <!-- Avatar - spans both rows, shown on both mobile and PC -->
         <div class="w-9 h-9 sm:w-10 sm:h-10 shrink-0 bg-gray-100 dark:bg-gray-800 flex items-center justify-center text-[9px] text-gray-500 border border-gray-200 dark:border-gray-700 overflow-hidden rounded-sm self-center">
-          <img v-if="task.chatAvatarUrl" :src="task.chatAvatarUrl" class="w-full h-full object-cover" />
+          <img v-if="getChatAvatarUrl(task)" :src="getChatAvatarUrl(task)" class="w-full h-full object-cover" />
           <component v-else :is="task.modeIcon" class="w-4 h-4 sm:w-5 sm:h-5" />
         </div>
 

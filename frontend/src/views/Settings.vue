@@ -12,6 +12,7 @@ const settings = ref({
   dataDir: '',
   proxy: '',
   concurrency: 1,
+  autoBlockPrivateChat: false,
   botEnabled: false,
   botLoginNotify: false,
   botTaskFailure: false,
@@ -74,6 +75,7 @@ onMounted(async () => {
     settings.value.dataDir = res.data_dir || ''
     settings.value.proxy = res.global_proxy || ''
     settings.value.concurrency = res.tg_global_concurrency || 1
+    settings.value.autoBlockPrivateChat = res.auto_block_private_chat || false
     settings.value.botEnabled = res.telegram_bot_notify_enabled || false
     settings.value.botLoginNotify = res.telegram_bot_login_notify_enabled || false
     settings.value.botTaskFailure = res.telegram_bot_task_failure_enabled || false
@@ -109,6 +111,7 @@ const saveSettings = async () => {
       data_dir: settings.value.dataDir || null,
       global_proxy: settings.value.proxy || null,
       tg_global_concurrency: settings.value.concurrency || 1,
+      auto_block_private_chat: settings.value.autoBlockPrivateChat,
       timezone: settings.value.timezone,
     })
     showToast(t('settings.saveSuccess'))
@@ -285,6 +288,25 @@ const handleImport = async (e: Event) => {
             <div class="pt-2">
               <button @click="saveSettings" :disabled="loading" class="w-full py-2 text-sm bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-950 hover:bg-gray-800 dark:hover:bg-white transition-colors disabled:opacity-50">{{ loading ? t('settings.saving') : t('settings.saveGeneral') }}</button>
             </div>
+          </div>
+        </section>
+
+        <!-- 安全设置 -->
+        <section class="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800/60 p-6">
+          <div class="mb-6 border-b border-gray-200 dark:border-gray-800/60 pb-3 flex items-center justify-between">
+            <div>
+              <h2 class="text-base font-medium text-gray-900 dark:text-gray-100">{{ t('settings.security') }}</h2>
+              <p class="text-[10px] text-gray-500 mt-1">{{ t('settings.securityDesc') }}</p>
+            </div>
+          </div>
+          <div class="space-y-5">
+            <label class="flex items-start gap-3 cursor-pointer group p-3 bg-gray-50 dark:bg-gray-950 border border-gray-200 dark:border-gray-800/60 hover:border-rose-300 transition-colors">
+              <input v-model="settings.autoBlockPrivateChat" type="checkbox" @change="saveSettings" class="mt-0.5 w-4 h-4 text-rose-600 bg-gray-100 border-gray-300 rounded focus:ring-0 dark:bg-gray-800 dark:border-gray-600 shrink-0">
+              <div>
+                <span class="text-sm text-gray-800 dark:text-gray-200 group-hover:text-gray-900 dark:group-hover:text-gray-100 transition-colors">{{ t('settings.autoBlockPrivateChat') }}</span>
+                <p class="text-[10px] text-gray-400 mt-0.5">{{ t('settings.autoBlockPrivateChatDesc') }}</p>
+              </div>
+            </label>
           </div>
         </section>
 

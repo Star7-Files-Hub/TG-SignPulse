@@ -63,12 +63,14 @@ class MonitorIn(BaseModel):
     smart_dedup_pattern: Optional[str] = Field(None, description="智能去重提取正则（默认提取所有数字）")
     # 红包模式 - 监听群组
     chat_ids: List[int] = Field(default_factory=list, description="红包监听群组 Chat ID")
+    excluded_chat_ids: List[int] = Field(default_factory=list, description="排除的 Chat ID（该群组消息将被跳过）")
     button_names: List[str] = Field(default_factory=list, description="按钮名列表（空=任意按钮）")
     extract_pattern: Optional[str] = Field(None, description="提取数字正则")
     grab_text_template: str = Field("/grab {number}")
     red_packet_delay: float = Field(0, description="抢红包延迟秒数")
     auto_reply_list: List[str] = Field(default_factory=list)
     auto_reply_delay: float = Field(0, description="回复延迟秒数")
+    exclude_keywords: List[str] = Field(default_factory=list, description="排除关键词（包含则跳过红包）")
     enabled: bool = Field(True)
 
 
@@ -93,12 +95,14 @@ class MonitorUpdate(BaseModel):
     forward_with_button: Optional[bool] = None
     smart_dedup_pattern: Optional[str] = None
     chat_ids: Optional[List[int]] = None
+    excluded_chat_ids: Optional[List[int]] = None
     button_names: Optional[List[str]] = None
     extract_pattern: Optional[str] = None
     grab_text_template: Optional[str] = None
     red_packet_delay: Optional[float] = None
     auto_reply_list: Optional[List[str]] = None
     auto_reply_delay: Optional[float] = None
+    exclude_keywords: Optional[List[str]] = None
     enabled: Optional[bool] = None
 
 

@@ -93,8 +93,33 @@ class EmbyWatchLogEntry(BaseModel):
     error: str = ""
 
 
-# ── 日志缓存 ──
-_watch_logs: list[dict] = []
+# ── 日志缓存（持久化到文件，避免重启丢失） ──
+
+def _logs_file() -> Path:
+    return settings.resolve_workdir() / "emby_logs.json"
+
+
+def _load_watch_logs() -> list[dict]:
+    f = _logs_file()
+    if not f.exists():
+        return []
+    try:
+        return json.loads(f.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def _save_watch_logs() -> None:
+    try:
+        _logs_file().write_text(
+            json.dumps(_watch_logs[-500:], ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+_watch_logs: list[dict] = _load_watch_logs()
 
 
 def _add_watch_log(task_id: str, task_name: str, account: str, server: str,
@@ -113,6 +138,7 @@ def _add_watch_log(task_id: str, task_name: str, account: str, server: str,
     })
     if len(_watch_logs) > 500:
         del _watch_logs[:-500]
+    _save_watch_logs()
 
 
 # ── CRUD ──
